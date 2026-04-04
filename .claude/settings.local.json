@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(pnpm build:*)",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm dev:*)",
+      "Bash(kill 5797 11178 11825)",
+      "Bash(xargs kill:*)",
+      "Bash(curl -s http://localhost:3001/api/configs)",
+      "Bash(curl:*)",
+      "Bash(pnpm:*)",
+      "Bash(timeout 5 node server.js)",
+      "Bash(node:*)",
+      "Bash(lsof -ti:3000)",
+      "Bash(pkill -f \"node server.js\")",
+      "Bash(find /Users/wolf/Desktop/wolf -maxdepth 2 -name *.html -o -name *.js -o -name *.css)"
+    ]
+  }
+}

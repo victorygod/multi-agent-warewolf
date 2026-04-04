@@ -1,0 +1,5 @@
+{
+  "base_url": "https://your-api-endpoint/v1",
+  "auth_token": "your-api-key-here",
+  "model": "your-model-name"
+}
