@@ -1,0 +1,15 @@
+{
+  "name": "werewolf-game",
+  "version": "1.0.0",
+  "description": "狼人杀游戏 - 可配置规则引擎",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": ["werewolf", "game", "ai"],
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

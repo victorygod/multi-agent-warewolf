@@ -21,6 +21,7 @@ const MESSAGE_TYPES = {
   DEATH: 'death',                      // 夜晚死亡公告
   EXILE: 'exile',                      // 放逐公告
   GAME_OVER: 'game_over',              // 游戏结束
+  HUNTER_SHOOT: 'hunter_shoot',        // 猎人开枪
 
   // 遗言
   LAST_WORDS: 'last_words'
@@ -156,7 +157,7 @@ class MessageManager {
   }
 
   // 夜晚死亡公告
-  addDeathMessage(deadPlayers, dayCount) {
+  addDeathMessage(deadPlayers, allPlayers, dayCount) {
     if (!deadPlayers || deadPlayers.length === 0) {
       return this.addMessage(MESSAGE_TYPES.DEATH, {
         content: `昨晚是平安夜，没有人死亡`,
@@ -165,7 +166,11 @@ class MessageManager {
         visibility: 'public'
       });
     }
-    const names = deadPlayers.map(p => p.name).join('、');
+    const names = deadPlayers.map(deadP => {
+      // 查找位置号（1-based）
+      const pos = allPlayers.findIndex(p => p.id === deadP.id) + 1;
+      return `${pos}号${deadP.name}`;
+    }).join('、');
     return this.addMessage(MESSAGE_TYPES.DEATH, {
       content: `昨晚 ${names} 死亡了`,
       phase: 'day_discuss',
@@ -177,19 +182,20 @@ class MessageManager {
   // 放逐公告（带票型）
   addExileMessage(exiledPlayer, voteDetails, players, dayCount) {
     // 按得票人分组统计
-    const voteCount = {}; // targetId -> count
-    const voteBy = {};    // targetId -> [voterNames]
+    const voteCount = {}; // targetIndex -> count
+    const voteBy = {};    // targetIndex -> [{index, name}]
 
     if (voteDetails && Object.keys(voteDetails).length > 0) {
       for (const [voterId, targetId] of Object.entries(voteDetails)) {
-        const voter = players.find(p => p.id === voterId);
-        const target = players.find(p => p.id === targetId);
-        if (voter && target) {
-          voteCount[targetId] = (voteCount[targetId] || 0) + 1;
-          if (!voteBy[targetId]) {
-            voteBy[targetId] = [];
+        const voterIndex = players.findIndex(p => p.id === voterId);
+        const targetIndex = players.findIndex(p => p.id === targetId);
+        if (voterIndex !== -1 && targetIndex !== -1) {
+          const targetKey = String(targetIndex);
+          voteCount[targetKey] = (voteCount[targetKey] || 0) + 1;
+          if (!voteBy[targetKey]) {
+            voteBy[targetKey] = [];
           }
-          voteBy[targetId].push(voter.name);
+          voteBy[targetKey].push({ index: voterIndex, name: players[voterIndex].name });
         }
       }
     }
@@ -198,16 +204,22 @@ class MessageManager {
     const sortedTargets = Object.entries(voteCount)
       .sort((a, b) => b[1] - a[1]);
 
-    const voteLines = sortedTargets.map(([targetId, count]) => {
-      const target = players.find(p => p.id === targetId);
-      const voters = voteBy[targetId] || [];
-      return `${target?.name || '未知'}：${count}票（${voters.join('、')}）`;
+    const voteLines = sortedTargets.map(([targetIndex, count]) => {
+      const idx = parseInt(targetIndex);
+      const target = players[idx];
+      const voters = voteBy[targetIndex] || [];
+      const voterTexts = voters.map(v => `${v.index + 1}号${v.name}`);
+      return `${idx + 1}号${target?.name || '未知'}：${count}票（${voterTexts.join('、')}）`;
     });
 
     const voteText = voteLines.length > 0 ? voteLines.join('<br>') : '无人投票';
 
+    // 计算被放逐玩家的位置号
+    const exiledIndex = exiledPlayer ? players.findIndex(p => p.id === exiledPlayer.id) : -1;
+    const exiledPosition = exiledIndex !== -1 ? exiledIndex + 1 : null;
+
     const content = exiledPlayer
-      ? `【票型】<br>${voteText}<br><br>${exiledPlayer.name} 被投票放逐了`
+      ? `【票型】<br>${voteText}<br><br>${exiledPosition}号${exiledPlayer.name} 被投票放逐了`
       : `【票型】<br>${voteText}<br><br>平票，无人被放逐`;
 
     return this.addMessage(MESSAGE_TYPES.EXILE, {
@@ -222,10 +234,11 @@ class MessageManager {
   addGameOverMessage(winner, players) {
     const winnerText = winner === 'werewolf' ? '狼人阵营获胜！' : '好人阵营获胜！';
 
-    const roleReveal = players.map(p => {
+    const roleReveal = players.map((p, index) => {
       const roleName = getRoleName(p.role);
       const deathReason = getDeathReasonText(p.deathReason, p.alive);
-      return `${p.name}：${roleName}${deathReason}`;
+      const position = index + 1;
+      return `${position}号${p.name}：${roleName}${deathReason}`;
     }).join('\n');
 
     return this.addMessage(MESSAGE_TYPES.GAME_OVER, {
@@ -235,11 +248,11 @@ class MessageManager {
   }
 
   // 遗言
-  addLastWords(playerId, playerName, content) {
+  addLastWords(playerId, playerName, content, position) {
     return this.addMessage(MESSAGE_TYPES.LAST_WORDS, {
       playerId,
       playerName,
-      content: `【${playerName}的遗言】\n${content}`,
+      content: `【${position}号${playerName}的遗言】\n${content}`,
       visibility: 'public'
     });
   }
@@ -286,6 +299,7 @@ class MessageManager {
       id: msg.id,
       type: msg.type,
       content: msg.content,
+      playerId: msg.playerId,
       playerName: msg.playerName,
       className: getMessageClassName(msg.type),
       timestamp: msg.timestamp,
@@ -306,6 +320,7 @@ function getMessageClassName(type) {
     [MESSAGE_TYPES.DEATH]: 'system death',
     [MESSAGE_TYPES.EXILE]: 'system exile',
     [MESSAGE_TYPES.GAME_OVER]: 'system gameover',
+    [MESSAGE_TYPES.HUNTER_SHOOT]: 'system hunter',
     [MESSAGE_TYPES.LAST_WORDS]: 'system lastwords'
   };
   return classNames[type] || '';

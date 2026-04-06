@@ -59,17 +59,40 @@ class AIAgent {
     // 生成游戏规则
     const gameRules = getGameRules(this.game.playerCount);
 
+    // 狼人阵营：显示狼队友信息
+    let wolfTeammates = '';
+    if (CAMPS[this.player.role] === 'wolf') {
+      const wolfTeammatesList = this.game.players
+        .filter(p => p.id !== this.player.id && CAMPS[p.role] === 'wolf')
+        .map(p => {
+          const pos = this.game.players.findIndex(gp => gp.id === p.id) + 1;
+          return `${pos}号：${p.name}`;
+        });
+      if (wolfTeammatesList.length > 0) {
+        wolfTeammates = `\n- 狼队友：${wolfTeammatesList.join('、')}`;
+      }
+    }
+
     this.systemPrompt = `${gameRules}
 
 ## 你的身份
 - 名字：${this.player.name}
 - 位置：${position}号位
 - 角色：${role}
-- 阵营：${camp}
+- 阵营：${camp}${wolfTeammates}
 - ${roleDesc}
 
 ## 你的性格
 ${soul}
+
+## 策略
+首先整理目前已知确定性的信息和怀疑的信息。
+对于事实性的事件，完全相信，例如谁死了，猎人发动技能等。
+对于他人的发言，需要分情况分析，不可盲目轻信。
+列举几个可能的行动方向。
+为每个行动方向推演这么做对己方阵营胜利有什么好处。
+再分析对方阵营会得到什么线索以及可能做出的反应。
+做出最能取得胜利的行动选项。（注意胜利条件是屠边的话，清理掉所有神或所有村民就是狼人胜利）
 `;
   }
 
@@ -141,11 +164,27 @@ ${soul}
       // 发言
       else if (msg.type === 'speech' || msg.type === 'wolf_speech') {
         const phaseLabel = this.getPhaseLabel(msg.phase);
-        lines.push(`[${phaseLabel}] ${msg.playerName}：${msg.content}`);
+        // 用 playerId 找位置，避免重名问题
+        const playerIndex = this.game.players.findIndex(p => p.id === msg.playerId);
+        const pos = playerIndex >= 0 ? playerIndex + 1 : '?';
+        lines.push(`[${phaseLabel}] ${pos}号${msg.playerName}：${msg.content}`);
       }
       // 私有消息（自己的行动）
       else if (msg.type === 'vote' || msg.type === 'skill_use' || msg.type === 'skill_result') {
         lines.push(`[行动] ${msg.content}`);
+      }
+      // 遗言
+      else if (msg.type === 'last_words') {
+        // 用 playerId 找位置
+        const playerIndex = this.game.players.findIndex(p => p.id === msg.playerId);
+        const pos = playerIndex >= 0 ? playerIndex + 1 : '?';
+        // content 已经包含"【xxx的遗言】"前缀，替换为带位置的格式
+        const content = msg.content.replace(`【${msg.playerName}的遗言】`, `【${pos}号${msg.playerName}的遗言】`);
+        lines.push(content);
+      }
+      // 猎人开枪
+      else if (msg.type === 'hunter_shoot') {
+        lines.push(`【猎人开枪】${msg.content}`);
       }
     });
 
@@ -197,28 +236,33 @@ ${soul}
   }
 
   getPhasePrompt(phase, context) {
-    // 获取存活玩家名字列表
-    const aliveNames = context.alivePlayers.map(p => p.name).join('、');
+    // 获取存活玩家列表（带位置号）
+    const aliveList = context.alivePlayers.map(p => {
+      const pos = this.game.players.findIndex(gp => gp.id === p.id) + 1;
+      return `${pos}号: ${p.name}`;
+    }).join('\n');
 
     const prompts = {
       [PHASES.NIGHT_WEREWOLF_DISCUSS]: '【狼人讨论】轮到你发言了，请简要发言讨论今晚击杀目标。以JSON格式返回: {"type": "speech", "content": "你说的话"}',
-      [PHASES.NIGHT_WEREWOLF_VOTE]: `【狼人投票】存活玩家：${aliveNames}。请选择今晚要击杀的玩家（必须使用完整名字）。以JSON格式返回: {"type": "vote", "target": "玩家名"}`,
-      [PHASES.NIGHT_SEER]: `【预言家】存活玩家：${aliveNames}。请选择要查验的玩家（必须使用完整名字）。以JSON格式返回: {"type": "vote", "target": "玩家名"}`,
-      [PHASES.NIGHT_GUARD]: `【守卫】存活玩家：${aliveNames}。请选择要守护的玩家（必须使用完整名字）。以JSON格式返回: {"type": "vote", "target": "玩家名"}`,
+      [PHASES.NIGHT_WEREWOLF_VOTE]: `【狼人投票】存活玩家：\n${aliveList}\n请选择今晚要击杀的玩家，回复位置编号（纯数字，如 1）。以JSON格式返回: {"type": "vote", "target": 编号}`,
+      [PHASES.NIGHT_SEER]: `【预言家】存活玩家：\n${aliveList}\n请选择要查验的玩家，回复位置编号（纯数字，如 1）。以JSON格式返回: {"type": "vote", "target": 编号}`,
+      [PHASES.NIGHT_GUARD]: `【守卫】存活玩家：\n${aliveList}\n请选择要守护的玩家，回复位置编号（纯数字，如 1）。以JSON格式返回: {"type": "vote", "target": 编号}`,
       [PHASES.DAY_DISCUSS]: '【白天发言】轮到你发言了，请分析局势，简要发言。以JSON格式返回: {"type": "speech", "content": "你说的话"}',
-      [PHASES.DAY_VOTE]: `【白天投票】存活玩家：${aliveNames}。请选择要放逐的玩家（必须使用完整名字），或选择弃权。以JSON格式返回: {"type": "vote", "target": "玩家名"} 或 {"type": "skip"} 表示弃权`,
+      [PHASES.DAY_VOTE]: `【白天投票】存活玩家：\n${aliveList}\n请选择要放逐的玩家，回复位置编号（纯数字，如 1），或选择弃权。以JSON格式返回: {"type": "vote", "target": 编号} 或 {"type": "skip"} 表示弃权`,
       [PHASES.LAST_WORDS]: '【遗言】你即将死亡，请发表遗言。以JSON格式返回: {"type": "speech", "content": "你的遗言"}',
-      [PHASES.HUNTER_SHOOT]: `【猎人】存活玩家：${aliveNames}。你死亡了，可以选择开枪带走一人（必须使用完整名字）。以JSON格式返回: {"type": "vote", "target": "玩家名"} 或 {"type": "skip"} 表示不开枪`
+      [PHASES.HUNTER_SHOOT]: `【猎人】存活玩家：\n${aliveList}\n你死亡了，可以选择开枪带走一人，回复位置编号（纯数字，如 1）。以JSON格式返回: {"type": "vote", "target": 编号} 或 {"type": "skip"} 表示不开枪`
     };
 
     // 女巫特殊处理
     if (phase === PHASES.NIGHT_WITCH) {
-      const killedName = context.werewolfTarget?.name || '无人';
+      const killedPlayer = context.werewolfTarget;
+      const killedName = killedPlayer?.name || '无人';
+      const killedPos = killedPlayer ? this.game.players.findIndex(p => p.id === killedPlayer.id) + 1 : '';
       const healAvailable = context.witchPotion?.heal ? '可用' : '已用完';
       const poisonAvailable = context.witchPotion?.poison ? '可用' : '已用完';
       const healed = context.nightActions?.healed ? '（今晚已用解药）' : '';
       const poisoned = context.nightActions?.poisonTarget ? '（今晚已用毒药）' : '';
-      return `【女巫】今晚${killedName}被狼人杀害。解药：${healAvailable}${healed}，毒药：${poisonAvailable}${poisoned}。你可以多次行动（先用解药再用毒药，或选择skip结束）。注意：毒药不能毒被刀的人。以JSON格式返回: {"type": "witch", "action": "heal/poison/skip", "target": "玩家名（仅poison时需要）"}`;
+      return `【女巫】存活玩家：\n${aliveList}\n今晚 ${killedPos}号${killedName} 被狼人杀害。解药：${healAvailable}${healed}，毒药：${poisonAvailable}${poisoned}。你可以多次行动（先用解药再用毒药，或选择skip结束）。注意：毒药不能毒被刀的人。以JSON格式返回: {"type": "witch", "action": "heal/poison/skip", "target": 编号（仅poison时需要）}`;
     }
 
     return prompts[phase] || '请行动。以JSON格式返回。';

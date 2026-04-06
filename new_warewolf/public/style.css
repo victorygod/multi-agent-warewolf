@@ -71,35 +71,15 @@ body {
   font-weight: 600;
 }
 
-.role-badge.werewolf {
-  background: rgba(142, 68, 173, 0.5);
-  color: #fff;
-}
-
-.role-badge.seer {
-  background: rgba(52, 152, 219, 0.5);
-  color: #fff;
-}
-
-.role-badge.witch {
-  background: rgba(155, 89, 182, 0.5);
-  color: #fff;
-}
-
-.role-badge.guard {
-  background: rgba(46, 204, 113, 0.5);
-  color: #fff;
-}
-
-.role-badge.hunter {
-  background: rgba(230, 126, 34, 0.5);
-  color: #fff;
-}
-
-.role-badge.villager {
-  background: rgba(149, 165, 166, 0.5);
-  color: #fff;
-}
+.role-badge.werewolf { background: rgba(142, 68, 173, 0.5); }
+.role-badge.seer { background: rgba(52, 152, 219, 0.5); }
+.role-badge.witch { background: rgba(155, 89, 182, 0.5); }
+.role-badge.guard { background: rgba(46, 204, 113, 0.5); }
+.role-badge.hunter { background: rgba(230, 126, 34, 0.5); }
+.role-badge.villager { background: rgba(149, 165, 166, 0.5); }
+.role-badge.idiot { background: rgba(241, 196, 15, 0.5); }
+.role-badge.cupid { background: rgba(231, 76, 60, 0.5); }
+.role-badge.knight { background: rgba(52, 73, 94, 0.5); }
 
 .teammates {
   color: #aaa;
@@ -163,14 +143,6 @@ body {
 .player-card.empty-slot:hover {
   background: rgba(255, 255, 255, 0.15);
   border-color: var(--primary);
-}
-
-.player-card.empty-slot .player-name {
-  color: #888;
-}
-
-.player-card.empty-slot .player-status {
-  color: var(--primary);
 }
 
 .player-position {
@@ -241,6 +213,13 @@ body {
   background: rgba(255, 255, 255, 0.05);
   color: #aaa;
   font-size: 13px;
+}
+
+.message.system.opening .message-content {
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+  font-size: 16px;
+  font-weight: bold;
 }
 
 .message.system.death .message-content {
@@ -414,11 +393,10 @@ body {
   color: #fff;
 }
 
-.vote-btn:active, .skill-btn:active {
+.vote-btn.skip, .skill-btn.skip {
   transform: scale(0.95);
 }
 
-/* 女巫技能按钮 */
 .skill-btn.heal {
   background: rgba(39, 174, 96, 0.3);
   border-color: var(--success);
@@ -442,10 +420,6 @@ body {
 .skill-btn.skip {
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(255, 255, 255, 0.1);
-}
-
-.skill-btn.skip:hover {
-  background: rgba(255, 255, 255, 0.2);
 }
 
 .poison-section {
@@ -540,63 +514,6 @@ body {
 
 .buttons button:not(:disabled):active {
   transform: scale(0.95);
-}
-
-/* 角色面板 */
-#role-name {
-  font-size: 32px;
-  font-weight: bold;
-  margin-bottom: 12px;
-}
-
-#role-desc {
-  font-size: 14px;
-  color: #aaa;
-  text-align: center;
-  max-width: 280px;
-  line-height: 1.5;
-}
-
-#teammates {
-  margin-top: 12px;
-  font-size: 14px;
-  color: var(--wolf);
-}
-
-#confirm-role-btn {
-  margin-top: 24px;
-  padding: 12px 40px;
-  background: var(--success);
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  font-size: 16px;
-  cursor: pointer;
-}
-
-/* 游戏结束面板 */
-#winner {
-  font-size: 20px;
-  margin-bottom: 16px;
-}
-
-#final-roles {
-  font-size: 14px;
-  color: #aaa;
-  text-align: center;
-  max-width: 300px;
-  line-height: 1.6;
-}
-
-#restart-btn {
-  margin-top: 24px;
-  padding: 12px 40px;
-  background: var(--primary);
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  font-size: 16px;
-  cursor: pointer;
 }
 
 /* 响应式 */

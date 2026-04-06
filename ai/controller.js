@@ -11,6 +11,7 @@ const DEBUG_MODE = process.env.DEBUG_MODE === 'true' || false;
 class AIController {
   constructor() {
     this.agents = new Map();
+    this.processing = false; // 防止并发处理
   }
 
   getAgent(player, game) {
@@ -25,15 +26,31 @@ class AIController {
 
   clear() {
     this.agents.clear();
+    this.processing = false;
   }
 
   async processAITurn(game, broadcast) {
+    // 防止并发处理
+    if (this.processing) {
+      console.log('[AI] 已有处理进行中，跳过');
+      return;
+    }
+
     // 游戏结束，停止
     if (game.phase === PHASES.GAME_OVER) {
       console.log('[AI] 游戏结束');
       return;
     }
 
+    this.processing = true;
+    try {
+      await this._doProcessAITurn(game, broadcast);
+    } finally {
+      this.processing = false;
+    }
+  }
+
+  async _doProcessAITurn(game, broadcast) {
     const currentSpeaker = game.getCurrentSpeaker();
 
     // 发言阶段 - 只有当前发言者是 AI 时才处理
@@ -116,7 +133,8 @@ class AIController {
   }
 
   async handleVote(game, broadcast) {
-    const expectedVoters = game.phase === PHASES.NIGHT_WEREWOLF_VOTE
+    const currentPhase = game.phase;
+    const expectedVoters = currentPhase === PHASES.NIGHT_WEREWOLF_VOTE
       ? game.players.filter(p => p.alive && p.role === ROLES.WEREWOLF)
       : game.players.filter(p => p.alive);
 
@@ -139,43 +157,91 @@ class AIController {
         action = null;
       }
 
-      if (action && action.type === 'skip') {
-        // 弃权
-        console.log(`[AI] ${aiPlayer.name} 选择弃权`);
-        return { voterId: aiPlayer.id, targetId: null };
+      // 返回投票者和决策，稍后在提交时再验证
+      return { voterId: aiPlayer.id, action };
+    });
+
+    const results = await Promise.all(votePromises);
+
+    // 串行提交投票，每次提交前检查状态
+    for (const { voterId, action } of results) {
+      // 检查阶段是否还是投票阶段
+      if (game.phase !== currentPhase) {
+        console.log(`[AI] 阶段已改变 (${game.phase})，停止提交投票`);
+        break;
       }
 
-      if (action && action.type === 'vote' && action.target) {
-        const target = game.players.find(p => p.name === action.target);
-        if (target && target.alive) {
-          console.log(`[AI] ${aiPlayer.name} 投票给 ${target.name}`);
-          return { voterId: aiPlayer.id, targetId: target.id };
-        } else {
-          console.log(`[AI] ${aiPlayer.name} 找不到玩家 "${action.target}"，使用随机`);
+      // 检查投票者是否已经投过票
+      if (game.votes[voterId]) {
+        console.log(`[AI] ${voterId} 已投票，跳过`);
+        continue;
+      }
+
+      // 检查投票者是否还活着
+      const voter = game.players.find(p => p.id === voterId);
+      if (!voter || !voter.alive) {
+        console.log(`[AI] ${voterId} 已死亡，跳过`);
+        continue;
+      }
+
+      let targetId = null;
+
+      if (action && action.type === 'skip') {
+        targetId = null;
+        console.log(`[AI] ${voter.name} 选择弃权`);
+      } else if (action && action.type === 'vote' && action.target) {
+        // 先尝试解析数字
+        const targetNum = parseInt(action.target);
+        if (!isNaN(targetNum)) {
+          const target = game.players[targetNum - 1]; // 位置是1-based
+          if (target && target.alive) {
+            targetId = target.id;
+            console.log(`[AI] ${voter.name} 投票给 ${targetNum}号 ${target.name}`);
+          }
+        }
+
+        // 再尝试匹配名字
+        if (!targetId) {
+          const target = game.players.find(p => p.name === action.target && p.alive);
+          if (target) {
+            targetId = target.id;
+            console.log(`[AI] ${voter.name} 投票给 ${target.name}`);
+          }
+        }
+
+        // 随机选择
+        if (!targetId) {
+          const targets = currentPhase === PHASES.NIGHT_WEREWOLF_VOTE
+            ? game.players.filter(p => p.alive && p.role !== ROLES.WEREWOLF)
+            : game.players.filter(p => p.alive && p.id !== voterId);
+          if (targets.length > 0) {
+            const t = targets[Math.floor(Math.random() * targets.length)];
+            targetId = t.id;
+            console.log(`[AI] ${voter.name} 找不到目标，随机投票给 ${t.name}`);
+          }
+        }
+      } else {
+        // 随机投票
+        const targets = currentPhase === PHASES.NIGHT_WEREWOLF_VOTE
+          ? game.players.filter(p => p.alive && p.role !== ROLES.WEREWOLF)
+          : game.players.filter(p => p.alive && p.id !== voterId);
+        if (targets.length > 0) {
+          const t = targets[Math.floor(Math.random() * targets.length)];
+          targetId = t.id;
+          console.log(`[AI] ${voter.name} 随机投票给 ${t.name}`);
         }
       }
 
-      // 默认随机投票
-      const targets = game.phase === PHASES.NIGHT_WEREWOLF_VOTE
-        ? game.players.filter(p => p.alive && p.role !== ROLES.WEREWOLF)
-        : game.players.filter(p => p.alive && p.id !== aiPlayer.id);
-
-      if (targets.length > 0) {
-        const t = targets[Math.floor(Math.random() * targets.length)];
-        console.log(`[AI] ${aiPlayer.name} 随机投票给 ${t.name}`);
-        return { voterId: aiPlayer.id, targetId: t.id };
-      }
-      return null;
-    });
-
-    const votes = (await Promise.all(votePromises)).filter(v => v);
-    for (const { voterId, targetId } of votes) {
       try {
         game.vote(voterId, targetId);
-      } catch (e) {}
+      } catch (e) {
+        console.log(`[AI] ${voter.name} 投票失败: ${e.message}`);
+      }
     }
 
     broadcast('state_update', game.getState());
+
+    // 继续处理下一个阶段
     setTimeout(() => this.processAITurn(game, broadcast), 500);
   }
 
@@ -228,8 +294,16 @@ class AIController {
 
     try {
       if (role === 'seer' && action && action.type === 'vote' && action.target) {
-        const target = game.players.find(p => p.name === action.target);
-        if (target) {
+        // 先解析数字，再匹配名字
+        const targetNum = parseInt(action.target);
+        let target = null;
+        if (!isNaN(targetNum)) {
+          target = game.players[targetNum - 1];
+        }
+        if (!target) {
+          target = game.players.find(p => p.name === action.target);
+        }
+        if (target && target.alive) {
           game.seerCheck(player.id, target.id);
           console.log(`[AI] 预言家 ${player.name} 查验 ${target.name}`);
         }
@@ -237,8 +311,16 @@ class AIController {
         // 女巫可能需要多次行动
         await this.executeWitchActions(game, player, agent, action);
       } else if (role === 'guard' && action && action.type === 'vote' && action.target) {
-        const target = game.players.find(p => p.name === action.target);
-        if (target) {
+        // 先解析数字，再匹配名字
+        const targetNum = parseInt(action.target);
+        let target = null;
+        if (!isNaN(targetNum)) {
+          target = game.players[targetNum - 1];
+        }
+        if (!target) {
+          target = game.players.find(p => p.name === action.target);
+        }
+        if (target && target.alive) {
           game.guardProtect(player.id, target.id);
           console.log(`[AI] 守卫 ${player.name} 守护 ${target.name}`);
         }
@@ -274,10 +356,17 @@ class AIController {
       // 执行行动
       if (action && action.action) {
         try {
-          // 将 target 名字转换为 id
-          const targetId = action.target
-            ? game.players.find(p => p.name === action.target)?.id
-            : null;
+          // 解析目标：先数字，再名字
+          let targetId = null;
+          if (action.target) {
+            const targetNum = parseInt(action.target);
+            if (!isNaN(targetNum)) {
+              targetId = game.players[targetNum - 1]?.id;
+            }
+            if (!targetId) {
+              targetId = game.players.find(p => p.name === action.target)?.id;
+            }
+          }
           game.witchAction(player.id, action.action, targetId);
           console.log(`[AI] 女巫 ${player.name} ${action.action}${action.target ? ` ${action.target}` : ''}`);
         } catch (e) {

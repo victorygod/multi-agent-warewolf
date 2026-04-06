@@ -27,7 +27,6 @@ const elements = {
   setupPanel: document.getElementById('setup-panel'),
   playerNameInput: document.getElementById('player-name'),
   playerCountSelect: document.getElementById('player-count'),
-  aiCountInput: document.getElementById('ai-count'),
   readyBtn: document.getElementById('ready-btn')
 };
 
@@ -172,8 +171,16 @@ function connectSSE() {
     console.log('SSE 原始数据:', e.data);
     try {
       const data = JSON.parse(e.data);
+      const previousPhase = gameState ? gameState.phase : null;
       gameState = data;
       console.log('收到状态更新:', data.phase, '我的角色:', data.players?.find(p => p.name === playerName)?.role);
+
+      // 检测游戏开始（从waiting变为其他阶段），重新获取完整状态
+      if (previousPhase === 'waiting' && data.phase !== 'waiting') {
+        showOpeningMessage();
+        // 重新请求完整状态，确保角色信息正确
+        fetchFullState();
+      }
 
       // 首次状态更新时，清空消息区域并重新加载所有历史消息
       if (isFirstStateUpdate) {
@@ -248,7 +255,6 @@ function showError(message) {
 async function ready() {
   const name = elements.playerNameInput.value.trim() || `玩家${Date.now() % 1000}`;
   const count = parseInt(elements.playerCountSelect.value);
-  const aiCount = parseInt(elements.aiCountInput.value) || count - 1;
   const roleSelect = document.getElementById('player-role');
   const playerRole = roleSelect ? roleSelect.value : null;
 
@@ -256,7 +262,7 @@ async function ready() {
     const res = await fetch('/api/ready', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ playerName: name, playerCount: count, aiCount, playerRole })
+      body: JSON.stringify({ playerName: name, playerCount: count, playerRole })
     });
 
     const data = await res.json();
@@ -279,15 +285,66 @@ async function ready() {
     // 更新状态
     gameState = data.state;
 
-    // 如果游戏已开始，隐藏设置面板
-    if (gameState.phase !== 'waiting') {
-      elements.setupPanel.classList.add('hidden');
+    // 准备后直接进入房间
+    elements.setupPanel.classList.add('hidden');
+
+    // 如果游戏开始了，显示开场白并获取完整状态
+    if (data.gameStarted) {
+      showOpeningMessage();
+      fetchFullState();
     }
 
     updateUI();
   } catch (e) {
     console.error('准备失败:', e);
     showError('操作失败，请重试');
+  }
+}
+
+// 添加 AI
+async function addAI() {
+  try {
+    const res = await fetch('/api/add-ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ count: 1 })
+    });
+
+    const data = await res.json();
+    if (data.success) {
+      gameState = data.state;
+      updateUI();
+      // 如果游戏开始了，显示开场白并获取完整状态
+      if (data.gameStarted) {
+        showOpeningMessage();
+        fetchFullState();
+      }
+    } else {
+      showError(data.error);
+    }
+  } catch (e) {
+    console.error('添加AI失败:', e);
+    showError('添加AI失败，请重试');
+  }
+}
+
+// 显示开场白（只在前端显示，不记录到后端）
+function showOpeningMessage() {
+  addPhaseDivider('游戏开始');
+  addMessage('天黑请闭眼。', 'system opening');
+}
+
+// 获取完整游戏状态（确保角色信息正确）
+async function fetchFullState() {
+  if (!playerName) return;
+  try {
+    const res = await fetch(`/api/state?name=${encodeURIComponent(playerName)}`);
+    const state = await res.json();
+    gameState = state;
+    updateUI();
+    console.log('获取完整状态成功，角色:', state.players?.find(p => p.name === playerName)?.role);
+  } catch (e) {
+    console.error('获取状态失败:', e);
   }
 }
 
@@ -600,7 +657,10 @@ function updatePlayers() {
 
   // 获取当前玩家（用于判断可见性）
   const myPlayer = getMyPlayer();
+  const total = gameState.playerCount || 9;
+  const currentCount = gameState.players ? gameState.players.length : 0;
 
+  // 显示已有玩家
   gameState.players.forEach((player, index) => {
     const position = index + 1;
     const card = document.createElement('div');
@@ -634,6 +694,22 @@ function updatePlayers() {
 
     elements.playersGrid.appendChild(card);
   });
+
+  // 显示空位（只在等待阶段显示）
+  if (gameState.phase === 'waiting') {
+    for (let i = currentCount; i < total; i++) {
+      const position = i + 1;
+      const emptySlot = document.createElement('div');
+      emptySlot.className = 'player-card empty-slot';
+      emptySlot.innerHTML = `
+        <div class="player-position">${position}号</div>
+        <div class="player-name">空位</div>
+        <div class="player-status">点击添加AI</div>
+      `;
+      emptySlot.addEventListener('click', addAI);
+      elements.playersGrid.appendChild(emptySlot);
+    }
+  }
 }
 
 // 更新消息（现在消息在 SSE 处理中直接显示）
@@ -643,14 +719,16 @@ function updateMessages() {
 
 // 显示单条消息
 function displayMessage(msg) {
-  const { type, content, playerName, className, debugInfo } = msg;
+  const { type, content, playerId, playerName, className, debugInfo } = msg;
 
   if (type === 'phase_start') {
     // 阶段分割线
     addPhaseDivider(content);
   } else if (type === 'speech' || type === 'wolf_speech') {
-    // 发言消息
-    let displayContent = `${playerName}：${content}`;
+    // 发言消息，显示为"9号小明: xxxxx"，用 playerId 找位置
+    const playerIndex = gameState?.players?.findIndex(p => p.id === playerId);
+    const pos = playerIndex >= 0 ? playerIndex + 1 : '';
+    let displayContent = `${pos}号${playerName}：${content}`;
 
     // 如果有调试信息就显示（不依赖 debugMode 变量）
     if (debugInfo) {
@@ -749,9 +827,9 @@ function updateAction() {
     const current = gameState.players ? gameState.players.length : 0;
     const total = gameState.playerCount || 9;
     if (current < total) {
-      elements.actionPrompt.textContent = `等待更多玩家加入... (${current}/${total})`;
+      elements.actionPrompt.textContent = `等待更多玩家加入... (${current}/${total})，点击空位可添加AI`;
     } else {
-      elements.actionPrompt.textContent = '人已齐，等待房主开始游戏';
+      elements.actionPrompt.textContent = '人已齐，即将开始游戏...';
     }
     return;
   }
@@ -790,7 +868,8 @@ function updateAction() {
       if (gameState.currentSpeaker && gameState.currentSpeaker !== myPlayer.id) {
         const speaker = gameState.players.find(p => p.id === gameState.currentSpeaker);
         if (speaker) {
-          elements.actionPrompt.textContent = `等待 ${speaker.name} 发言...`;
+          const pos = getPlayerPosition(speaker.id);
+          elements.actionPrompt.textContent = `等待 ${pos}号${speaker.name} 发言...`;
           return;
         }
       }
@@ -839,7 +918,8 @@ function updateAction() {
     }
     const speaker = gameState.players.find(p => p.id === gameState.currentSpeaker);
     if (speaker) {
-      elements.actionPrompt.textContent = `等待 ${speaker.name} 发言...`;
+      const pos = getPlayerPosition(speaker.id);
+      elements.actionPrompt.textContent = `等待 ${pos}号${speaker.name} 发言...`;
       return;
     }
   }
@@ -1017,7 +1097,8 @@ function updateAction() {
       elements.actionInput.classList.add('active');
       elements.actionPrompt.textContent = '请发表遗言';
     } else if (lastWordsPlayer) {
-      elements.actionPrompt.textContent = `等待 ${lastWordsPlayer.name} 发表遗言...`;
+      const pos = getPlayerPosition(lastWordsPlayer.id);
+      elements.actionPrompt.textContent = `等待 ${pos}号${lastWordsPlayer.name} 发表遗言...`;
     } else {
       elements.actionPrompt.textContent = '等待遗言...';
     }

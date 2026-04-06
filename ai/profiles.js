@@ -70,15 +70,33 @@ const AI_PROFILES = [
   }
 ];
 
+// 已使用的名字集合（当前游戏局内有效）
+let usedNames = new Set();
+
 /**
- * 随机获取指定数量的 AI 配置
+ * 重置已使用的名字（新游戏时调用）
+ */
+function resetUsedNames() {
+  usedNames = new Set();
+}
+
+/**
+ * 随机获取指定数量的 AI 配置（确保本局内不重复）
  */
 function getRandomProfiles(count) {
-  const shuffled = [...AI_PROFILES].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, count);
+  // 过滤掉已使用的名字
+  const available = AI_PROFILES.filter(p => !usedNames.has(p.name));
+  const shuffled = available.sort(() => Math.random() - 0.5);
+  const selected = shuffled.slice(0, count);
+
+  // 记录已使用的名字
+  selected.forEach(p => usedNames.add(p.name));
+
+  return selected;
 }
 
 module.exports = {
   AI_PROFILES,
-  getRandomProfiles
+  getRandomProfiles,
+  resetUsedNames
 };

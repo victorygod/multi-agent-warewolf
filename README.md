@@ -26,8 +26,8 @@
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/victorygod/multi-agent-warewolf.git
-cd multi-agent-warewolf
+git clone https://github.com/your-username/werewolf-game.git
+cd werewolf-game
 ```
 
 ### 2. 安装依赖
@@ -65,7 +65,7 @@ npm start
 ## 项目结构
 
 ```
-multi-agent-warewolf/
+werewolf-game/
 ├── server.js          # Express 服务器入口
 ├── api_key.conf       # API 配置（需自行创建）
 ├── api_key.conf.example # 配置模板

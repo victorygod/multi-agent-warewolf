@@ -4,7 +4,7 @@
 
 const { ROLES, CAMPS, generateRoles, shuffleArray } = require('./roles');
 const { MessageManager, MESSAGE_TYPES } = require('./messages');
-const { getRandomProfiles } = require('../ai/profiles');
+const { getRandomProfiles, resetUsedNames } = require('../ai/profiles');
 
 // 游戏阶段
 const PHASES = {
@@ -28,6 +28,7 @@ class GameEngine {
   }
 
   reset() {
+    resetUsedNames(); // 重置 AI 名字池
     this.phase = PHASES.WAITING;
     this.players = [];
     this.dayCount = 0;
@@ -227,7 +228,8 @@ class GameEngine {
 
     // 添加投票私有消息
     const isWolfVote = this.phase === PHASES.NIGHT_WEREWOLF_VOTE;
-    const targetName = targetId ? this.players.find(p => p.id === targetId)?.name : '弃权';
+    const targetPlayer = targetId ? this.players.find(p => p.id === targetId) : null;
+    const targetName = targetPlayer ? `${this.players.findIndex(p => p.id === targetId) + 1}号${targetPlayer.name}` : '弃权';
     this.messages.addVoteMessage(voterId, targetName, isWolfVote, this.phase, this.dayCount);
 
     const expectedVoters = this.phase === PHASES.NIGHT_WEREWOLF_VOTE
@@ -292,8 +294,9 @@ class GameEngine {
       if (this.lastExiled && this.dayCount === 1) {
         this.phase = PHASES.LAST_WORDS;
         this.lastWordsPlayer = this.lastExiled;
+        const pos = this.players.findIndex(p => p.id === this.lastExiled.id) + 1;
         this.messages.addMessage('last_words_start', {
-          content: `请 ${this.lastExiled.name} 发表遗言`,
+          content: `请 ${pos}号${this.lastExiled.name} 发表遗言`,
           phase: this.phase,
           dayCount: this.dayCount,
           visibility: 'public'
@@ -321,8 +324,9 @@ class GameEngine {
     const isWolf = target.role === ROLES.WEREWOLF;
 
     // 添加技能使用和结果消息
-    this.messages.addSkillUseMessage(seerId, 'seer_check', target.name, this.phase, this.dayCount);
-    this.messages.addSkillResultMessage(seerId, `查验结果：${target.name} ${isWolf ? '是狼人' : '是好人'}`, this.phase, this.dayCount);
+    const targetPos = this.players.findIndex(p => p.id === targetId) + 1;
+    this.messages.addSkillUseMessage(seerId, 'seer_check', `${targetPos}号${target.name}`, this.phase, this.dayCount);
+    this.messages.addSkillResultMessage(seerId, `查验结果：${targetPos}号${target.name} ${isWolf ? '是狼人' : '是好人'}`, this.phase, this.dayCount);
 
     this.advancePhase();
     return { targetId, isWolf };
@@ -347,7 +351,9 @@ class GameEngine {
       if (this.werewolfTarget) {
         this.witchPotion.heal = false;
         this.nightActions.healed = this.werewolfTarget;
-        const targetName = this.players.find(p => p.id === this.werewolfTarget)?.name || '某人';
+        const targetPlayer = this.players.find(p => p.id === this.werewolfTarget);
+        const targetPos = this.players.findIndex(p => p.id === this.werewolfTarget) + 1;
+        const targetName = targetPlayer ? `${targetPos}号${targetPlayer.name}` : '某人';
         this.messages.addSkillUseMessage(witchId, 'witch_heal', targetName, this.phase, this.dayCount);
       }
     } else if (action === 'poison') {
@@ -367,7 +373,8 @@ class GameEngine {
       }
       this.witchPotion.poison = false;
       this.nightActions.poisonTarget = targetId;
-      this.messages.addSkillUseMessage(witchId, 'witch_poison', target.name, this.phase, this.dayCount);
+      const targetPos = this.players.findIndex(p => p.id === targetId) + 1;
+      this.messages.addSkillUseMessage(witchId, 'witch_poison', `${targetPos}号${target.name}`, this.phase, this.dayCount);
     } else if (action === 'skip') {
       // 记录跳过
       this.messages.addSkillUseMessage(witchId, 'witch_skip', null, this.phase, this.dayCount);
@@ -409,7 +416,8 @@ class GameEngine {
     this.lastGuardTarget = targetId;
 
     // 添加技能使用消息
-    this.messages.addSkillUseMessage(guardId, 'guard_protect', target.name, this.phase, this.dayCount);
+    const targetPos = this.players.findIndex(p => p.id === targetId) + 1;
+    this.messages.addSkillUseMessage(guardId, 'guard_protect', `${targetPos}号${target.name}`, this.phase, this.dayCount);
 
     this.advancePhase();
     return this.getState(guardId);
@@ -442,14 +450,31 @@ class GameEngine {
         } else {
           // 没有守卫，直接结算夜晚
           this.resolveNight();
-          this.messages.addDeathMessage(this.deadTonight, this.dayCount);
+          this.messages.addDeathMessage(this.deadTonight, this.players, this.dayCount);
+
+          // 检查是否有猎人需要开枪（非第一夜被刀死的猎人）
+          const deadHunterNoGuard = this.deadTonight.find(p =>
+            p.role === ROLES.HUNTER && p.deathReason === 'wolf'
+          );
 
           // 第一夜有人死才有遗言
           if (this.deadTonight.length > 0 && this.dayCount === 1) {
             this.phase = PHASES.LAST_WORDS;
             this.lastWordsPlayer = this.deadTonight[0];
+            const pos = this.players.findIndex(p => p.id === this.lastWordsPlayer.id) + 1;
             this.messages.addMessage('last_words_start', {
-              content: `请 ${this.lastWordsPlayer.name} 发表遗言`,
+              content: `请 ${pos}号${this.lastWordsPlayer.name} 发表遗言`,
+              phase: this.phase,
+              dayCount: this.dayCount,
+              visibility: 'public'
+            });
+          } else if (deadHunterNoGuard && this.dayCount > 1) {
+            // 非第一夜猎人被刀，进入开枪阶段（无遗言）
+            this.phase = PHASES.HUNTER_SHOOT;
+            this.hunterCanShoot = true;
+            const pos = this.players.findIndex(p => p.id === deadHunterNoGuard.id) + 1;
+            this.messages.addMessage('hunter_shoot_start', {
+              content: `猎人 ${pos}号${deadHunterNoGuard.name} 请决定是否开枪`,
               phase: this.phase,
               dayCount: this.dayCount,
               visibility: 'public'
@@ -470,14 +495,31 @@ class GameEngine {
       case PHASES.NIGHT_GUARD:
         this.resolveNight();
         // 添加死亡消息
-        this.messages.addDeathMessage(this.deadTonight, this.dayCount);
+        this.messages.addDeathMessage(this.deadTonight, this.players, this.dayCount);
+
+        // 检查是否有猎人需要开枪（非第一夜被刀死的猎人）
+        const deadHunter = this.deadTonight.find(p =>
+          p.role === ROLES.HUNTER && p.deathReason === 'wolf'
+        );
 
         // 第一夜有人死才有遗言
         if (this.deadTonight.length > 0 && this.dayCount === 1) {
           this.phase = PHASES.LAST_WORDS;
           this.lastWordsPlayer = this.deadTonight[0];
+          const pos = this.players.findIndex(p => p.id === this.lastWordsPlayer.id) + 1;
           this.messages.addMessage('last_words_start', {
-            content: `请 ${this.lastWordsPlayer.name} 发表遗言`,
+            content: `请 ${pos}号${this.lastWordsPlayer.name} 发表遗言`,
+            phase: this.phase,
+            dayCount: this.dayCount,
+            visibility: 'public'
+          });
+        } else if (deadHunter && this.dayCount > 1) {
+          // 非第一夜猎人被刀，进入开枪阶段（无遗言）
+          this.phase = PHASES.HUNTER_SHOOT;
+          this.hunterCanShoot = true;
+          const pos = this.players.findIndex(p => p.id === deadHunter.id) + 1;
+          this.messages.addMessage('hunter_shoot_start', {
+            content: `猎人 ${pos}号${deadHunter.name} 请决定是否开枪`,
             phase: this.phase,
             dayCount: this.dayCount,
             visibility: 'public'
@@ -567,7 +609,8 @@ class GameEngine {
     }
 
     // 添加遗言消息
-    this.messages.addLastWords(playerId, player.name, content);
+    const position = this.players.findIndex(p => p.id === playerId) + 1;
+    this.messages.addLastWords(playerId, player.name, content, position);
 
     // 检查是否是猎人且可以开枪
     if (player.role === ROLES.HUNTER && player.deathReason !== 'poison') {
@@ -599,8 +642,10 @@ class GameEngine {
     target.deathReason = 'hunter';
 
     // 添加开枪消息
-    this.messages.addMessage('hunter_shoot', {
-      content: `猎人 ${hunter.name} 开枪带走了 ${target.name}`,
+    const hunterPos = this.players.findIndex(p => p.id === hunterId) + 1;
+    const targetPos = this.players.findIndex(p => p.id === targetId) + 1;
+    this.messages.addMessage(MESSAGE_TYPES.HUNTER_SHOOT, {
+      content: `猎人 ${hunterPos}号${hunter.name} 开枪带走了 ${targetPos}号${target.name}`,
       phase: this.phase,
       dayCount: this.dayCount,
       visibility: 'public'

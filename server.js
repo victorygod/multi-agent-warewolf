@@ -25,7 +25,6 @@ try {
 process.env.DEBUG_MODE = 'true';
 
 const express = require('express');
-const path = require('path');
 const { GameEngine, PHASES } = require('./game/engine');
 const { AIController } = require('./ai/controller');
 const { ROLES } = require('./game/roles');
@@ -120,9 +119,26 @@ app.post('/api/join', (req, res) => {
     const id = playerId || `player_${Date.now()}`;
     const count = game.join(id, name, false);
     const state = game.getState(id);
-    broadcast('state_update', game.getState());
 
-    res.json({ success: true, playerId: id, playerCount: count, state });
+    // 检查是否人满，满则自动开始
+    let gameStarted = false;
+    if (game.players.length === game.playerCount && game.phase === 'waiting') {
+      try {
+        const startState = game.start();
+        gameStarted = true;
+        console.log(`游戏开始！阶段：${startState.phase}, 玩家数：${startState.players.length}`);
+        broadcast('state_update', startState);
+
+        // 开始处理 AI 行动
+        setTimeout(() => aiController.processAITurn(game, broadcast), 1000);
+      } catch (e) {
+        // 游戏已开始或其他错误
+      }
+    } else {
+      broadcast('state_update', game.getState());
+    }
+
+    res.json({ success: true, playerId: id, playerCount: count, state, gameStarted });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -133,13 +149,13 @@ app.get('/api/debug', (req, res) => {
   res.json({ debugMode: DEBUG_MODE });
 });
 
-// 一键准备（加入 + 补充AI + 自动开始）
+// 一键准备（加入 + 添加指定数量AI + 人满自动开始）
 app.post('/api/ready', async (req, res) => {
   try {
     const { playerName, playerCount, aiCount, playerRole } = req.body;
     const name = playerName || `玩家${Date.now() % 1000}`;
     const count = playerCount || 9;
-    const ai = aiCount !== undefined ? aiCount : count - 1;
+    const ai = aiCount !== undefined ? aiCount : 0;
 
     // 设置玩家数量
     game.setPlayerCount(count);
@@ -155,28 +171,36 @@ app.post('/api/ready', async (req, res) => {
       game.join(playerId, name, false);
     }
 
-    // 补充 AI 玩家
+    // 添加指定数量的 AI（不补满）
     const currentAiCount = game.players.filter(p => p.isAI).length;
     const needAi = ai - currentAiCount;
     if (needAi > 0) {
       game.addAIPlayers(needAi);
     }
 
-    // 尝试开始游戏
-    let state;
-    try {
-      // 调试模式下支持指定角色
-      state = game.start(DEBUG_MODE ? { playerId, role: playerRole } : null);
-      console.log(`游戏开始！阶段：${state.phase}, 玩家数：${state.players.length}`);
-      broadcast('state_update', state);
+    // 检查是否人满，满则自动开始
+    let gameStarted = false;
+    let state = game.getState(playerId);
 
-      // 开始处理 AI 行动
-      setTimeout(() => aiController.processAITurn(game, broadcast), 1000);
-    } catch (e) {
-      state = game.getState(playerId);
+    if (game.players.length === game.playerCount) {
+      try {
+        // 调试模式下支持指定角色
+        state = game.start(DEBUG_MODE ? { playerId, role: playerRole } : null);
+        gameStarted = true;
+        console.log(`游戏开始！阶段：${state.phase}, 玩家数：${state.players.length}`);
+        broadcast('state_update', state);
+
+        // 开始处理 AI 行动
+        setTimeout(() => aiController.processAITurn(game, broadcast), 1000);
+      } catch (e) {
+        // 游戏已开始或其他错误
+      }
+    } else {
+      // 人未满，广播当前状态
+      broadcast('state_update', game.getState());
     }
 
-    res.json({ success: true, playerId, state, debugMode: DEBUG_MODE });
+    res.json({ success: true, playerId, state, gameStarted, debugMode: DEBUG_MODE });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -197,9 +221,28 @@ app.post('/api/add-ai', (req, res) => {
   try {
     const { count } = req.body;
     const added = game.addAIPlayers(count);
-    const state = game.getState();
-    broadcast('state_update', state);
-    res.json({ success: true, added, state });
+
+    // 检查是否人满，满则自动开始
+    let gameStarted = false;
+    let state = game.getState();
+
+    if (game.players.length === game.playerCount && game.phase === 'waiting') {
+      try {
+        state = game.start();
+        gameStarted = true;
+        console.log(`游戏开始！阶段：${state.phase}, 玩家数：${state.players.length}`);
+        broadcast('state_update', state);
+
+        // 开始处理 AI 行动
+        setTimeout(() => aiController.processAITurn(game, broadcast), 1000);
+      } catch (e) {
+        // 游戏已开始或其他错误
+      }
+    } else {
+      broadcast('state_update', state);
+    }
+
+    res.json({ success: true, added, state, gameStarted });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

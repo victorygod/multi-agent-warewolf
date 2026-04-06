@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(node -c server.js)",
+      "Bash(node -c engine/main.js)",
+      "Bash(node -c engine/config.js)",
+      "Bash(node -c engine/roles.js)",
+      "Bash(node -c engine/phase.js)",
+      "Bash(node -c ai/agent.js)",
+      "Bash(node -c ai/controller.js)",
+      "Bash(node -c ai/prompts.js)",
+      "Bash(timeout 3 node server.js)"
+    ]
+  }
+}
