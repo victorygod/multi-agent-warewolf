@@ -2,23 +2,72 @@
  * 消息管理 - 存储和可见性控制
  */
 
-class MessageManager {
+const { EventEmitter } = require('./event');
+
+// 可见性规则
+const VisibilityRules = {
+  // 公开消息：所有人都可见
+  public: (player, msg, game) => true,
+
+  // 私人消息：只有发送者可见
+  self: (player, msg, game) => msg.playerId === player.id,
+
+  // 阵营消息：同阵营可见
+  camp: (player, msg, game) => {
+    const sender = game.players.find(p => p.id === msg.playerId);
+    if (!sender) return false;
+    return game.config.hooks?.getCamp(player, game) === game.config.hooks?.getCamp(sender, game);
+  },
+
+  // 情侣消息：只有情侣可见（可见情侣身份，角色身份不可见）
+  couple: (player, msg, game) => {
+    return game.couples?.includes(player.id);
+  },
+
+  // 情侣可见对方情侣身份（仅可见情侣身份，角色身份不可见）
+  // 用于情侣之间互相知道对方是情侣，但不知道对方角色
+  coupleIdentity: (player, msg, game) => {
+    // 发送者是情侣，且接收者也是情侣
+    if (!msg.playerId || !game.couples?.includes(msg.playerId)) return false;
+    return game.couples?.includes(player.id);
+  },
+
+  // 丘比特可见所有情侣身份（仅可见情侣身份，角色身份不可见）
+  cupidIdentity: (player, msg, game) => {
+    // 发送者是丘比特
+    const sender = game.players.find(p => p.id === msg.playerId);
+    if (!sender || sender.role?.id !== 'cupid') return false;
+    // 接收者是情侣
+    return game.couples?.includes(player.id);
+  }
+};
+
+class MessageManager extends EventEmitter {
   constructor() {
+    super();
     this.messages = [];
+    this._nextId = 1;
   }
 
   // 添加消息
-  add({ type, content, playerId, visibility = 'public', metadata = {} }) {
+  add({ type, content, playerId, playerName, visibility = 'public', metadata = {}, voteDetails, voteCounts }) {
     const msg = {
-      id: this.messages.length + 1,
+      id: this._nextId++,
       type,        // speech/vote/action/system/death
       content,
       playerId,    // 发送者
+      playerName,  // 玩家名称
       visibility,  // public/self/camp/couple
       metadata,    // 额外信息（如投票目标、技能类型等）
+      voteDetails, // 投票详情（用于显示票型）
+      voteCounts,  // 投票计数（用于显示各候选人票数）
       timestamp: Date.now()
     };
     this.messages.push(msg);
+
+    // 通知新消息添加（用于实时同步）
+    this.emit('message:added', msg);
+
     return msg;
   }
 
@@ -29,24 +78,9 @@ class MessageManager {
 
   // 判断玩家是否可见某消息
   canSee(player, msg, game) {
-    if (msg.visibility === 'public') return true;
-    if (msg.visibility === 'self') return msg.playerId === player.id;
-    if (msg.visibility === 'camp') {
-      const sender = game.players.find(p => p.id === msg.playerId);
-      return this.getCamp(player, game) === this.getCamp(sender, game);
-    }
-    if (msg.visibility === 'couple') {
-      return game.couples?.includes(player.id);
-    }
-    return false;
-  }
-
-  // 获取玩家阵营
-  getCamp(player, game) {
-    if (game.config.hooks?.getCamp) {
-      return game.config.hooks.getCamp(player, game);
-    }
-    return player.role.camp;
+    const rule = VisibilityRules[msg.visibility];
+    if (!rule) return false;
+    return rule(player, msg, game);
   }
 
   // 获取所有消息
@@ -55,4 +89,4 @@ class MessageManager {
   }
 }
 
-module.exports = { MessageManager };
+module.exports = { MessageManager, VisibilityRules };

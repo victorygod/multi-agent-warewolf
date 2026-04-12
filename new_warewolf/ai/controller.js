@@ -1,199 +1,317 @@
 /**
- * AI Controller - 与前端 Controller 接口对齐
- * 维护自己看到的消息历史、状态，直接操作 gameEngine
+ * AIController - AI 玩家控制器
+ * 继承 PlayerController，注入 Agent 策略
  */
 
-const { AIAgent } = require('./agent');
+const { PlayerController } = require('../engine/player');
+const { RandomAgent, LLMAgent, MockAgent } = require('./agents');
+const { createLogger } = require('../utils/logger');
 
-class AIController {
-  constructor(playerId, gameEngine) {
-    this.playerId = playerId;
-    this.game = gameEngine;
-    this.agent = null;
+// 创建日志实例（延迟初始化）
+let agentLogger = null;
+let backendLogger = null;
+function getLogger() {
+  if (!agentLogger) {
+    agentLogger = createLogger('agent.log');
+  }
+  return agentLogger;
+}
+function getBackendLogger() {
+  if (!backendLogger) {
+    // 优先使用 global.backendLogger（server.js中创建），否则创建新的
+    backendLogger = global.backendLogger || createLogger('backend.log');
+  }
+  return backendLogger;
+}
 
-    // 自己看到的消息历史
-    this.messageHistory = [];
+class AIController extends PlayerController {
+  /**
+   * @param {number} playerId - 玩家 ID
+   * @param {GameEngine} game - 游戏引擎
+   * @param {Object} options - 配置选项
+   * @param {string} options.agentType - Agent 类型: 'llm' | 'random' | 'mock'
+   * @param {Object} options.mockBehaviors - MockAgent 的预设行为
+   */
+  constructor(playerId, game, options = {}) {
+    super(playerId, game);
 
-    // 自己的状态缓存
-    this.cachedState = null;
+    // 创建 Agent
+    this.randomAgent = new RandomAgent(playerId, game);
+    this.llmAgent = options.agentType === 'llm'
+      ? new LLMAgent(playerId, game)
+      : null;
+    this.mockAgent = options.agentType === 'mock'
+      ? new MockAgent(playerId, game, options.mockOptions)
+      : null;
   }
 
-  // 初始化 Agent
-  initAgent() {
-    if (!this.agent) {
-      this.agent = new AIAgent(this.playerId, this.game);
-      this.agent.init(this.getContext());
-    }
+  /**
+   * 获取 MockAgent 实例（用于测试时预设行为）
+   */
+  getMockAgent() {
+    return this.mockAgent;
   }
 
-  // 获取当前状态（接口对齐）
-  getState() {
-    const state = this.game.getState(this.playerId);
-    this.cachedState = state;
+  // ========== 决策上下文构建 ==========
 
-    // 更新消息历史
-    if (state?.messages) {
-      const lastId = this.messageHistory.length > 0
-        ? this.messageHistory[this.messageHistory.length - 1].id
-        : 0;
-      state.messages.forEach(msg => {
-        if (msg.id > lastId) {
-          this.messageHistory.push(msg);
-        }
-      });
-    }
-
-    return state;
-  }
-
-  // 获取上下文（给 Agent 用）
-  getContext() {
+  buildContext(extraData = {}) {
     const state = this.getState();
-    const player = this.game.players.find(p => p.id === this.playerId);
-    // 优先使用 game.phaseManager.getCurrentPhase().id，这是更可靠的阶段来源
-    const phase = this.game.phaseManager?.getCurrentPhase()?.id || state?.phase;
+    const player = this.getPlayer();
 
     return {
-      phase,
+      phase: state.phase,
+      players: state.players,
       alivePlayers: this.game.players.filter(p => p.alive),
-      messageHistory: this.messageHistory,
-      werewolfTarget: this.game.werewolfTarget,
-      witchPotion: player?.state,
+      messages: this.getVisibleMessages(),
+      self: state.self,
       dayCount: this.game.dayCount,
-      game: this.game
+      werewolfTarget: this.game.werewolfTarget,
+      extraData
     };
   }
 
-  // 发言（接口对齐）
-  async speak(content) {
-    const player = this.game.players.find(p => p.id === this.playerId);
-    console.log(`[AI] ${player?.name} 发言阶段`);
+  // ========== 统一决策入口 ==========
 
-    if (content) {
-      this.game.speak(this.playerId, content);
-      console.log(`[AI] ${player?.name}: ${content}`);
-      return { success: true };
-    }
-
-    // 让 AI 决策
-    this.initAgent();
-    const action = await this.agent.getAction(this.getContext());
-    const speech = action?.type === 'speech' ? action.content : '过。';
-    this.game.speak(this.playerId, speech);
-    console.log(`[AI] ${player?.name}: ${speech}`);
-    return { success: true, content: speech };
-  }
-
-  // 投票（接口对齐）
-  async vote(targetId) {
-    const player = this.game.players.find(p => p.id === this.playerId);
-
-    if (targetId !== undefined && targetId !== null) {
-      const target = this.game.players.find(p => p.id === targetId);
-      const targetPos = this.game.players.findIndex(p => p.id === targetId) + 1;
-      console.log(`[AI] ${player?.name} 投票给 ${targetPos}号 ${target?.name}`);
-      this.game.vote(this.playerId, targetId);
-      return { success: true };
-    }
-
-    // 让 AI 决策
-    this.initAgent();
-    const action = await this.agent.getAction(this.getContext());
-    let resolvedTargetId = null;
-
-    if (action?.type === 'skip') {
-      console.log(`[AI] ${player?.name} 选择弃权`);
-      resolvedTargetId = null;
-    } else if (action?.type === 'vote' && action.target) {
-      const targetNum = parseInt(action.target);
-      if (!isNaN(targetNum) && targetNum > 0 && targetNum <= this.game.players.length) {
-        resolvedTargetId = this.game.players[targetNum - 1]?.id;
-        const target = this.game.players[targetNum - 1];
-        console.log(`[AI] ${player?.name} 投票给 ${targetNum}号 ${target?.name}`);
+  async decide(context) {
+    // 优先使用 MockAgent（测试用）
+    if (this.mockAgent) {
+      try {
+        const action = await this.mockAgent.decide(context);
+    // console.log(`[DEBUG MockAgent] playerId=${this.playerId}, action=${JSON.stringify(action)}, context.action=${context.action}`);
+        if (this.validateAction(action, context)) {
+          return action;
+        }
+      } catch (e) {
+        getLogger().error(`MockAgent 决策失败: ${e.message}`);
       }
     }
 
-    this.game.vote(this.playerId, resolvedTargetId);
-    return { success: true, targetId: resolvedTargetId };
-  }
-
-  // 弃权（接口对齐）
-  abstain() {
-    const player = this.game.players.find(p => p.id === this.playerId);
-    console.log(`[AI] ${player?.name} 选择弃权`);
-    this.game.vote(this.playerId, null);
-    return { success: true };
-  }
-
-  // 使用技能（接口对齐）
-  async useSkill(data) {
-    const player = this.game.players.find(p => p.id === this.playerId);
-    // 优先使用 game.phaseManager.getCurrentPhase().id，这是最可靠的阶段来源
-    const phase = this.game.phaseManager?.getCurrentPhase()?.id || this.cachedState?.phase;
-
-    if (data) {
-      const target = data.targetId ? this.game.players.find(p => p.id === data.targetId) : null;
-      const targetPos = target ? this.game.players.findIndex(p => p.id === target.id) + 1 : '';
-      console.log(`[AI] ${player?.name} 使用技能 ${phase}${target ? ` -> ${targetPos}号 ${target.name}` : ''}`);
-      this.game.useSkill(this.playerId, data.phase || phase, data.targetId, data.action);
-      return { success: true };
+    // 尝试 LLM 决策
+    if (this.llmAgent) {
+      try {
+        const action = await this.llmAgent.decide(context);
+        if (this.validateAction(action, context)) {
+          return action;
+        }
+        getLogger().info(`LLM action 无效，降级到 RandomAgent`);
+      } catch (e) {
+        getLogger().error(`LLM 决策失败: ${e.message}`);
+      }
     }
 
-    // 让 AI 决策
-    this.initAgent();
-    const context = this.getContext();
-    const action = await this.agent.getAction(context);
-    console.log(`[AI] ${player?.name} 技能决策:`, action);
+    // 降级到 RandomAgent
+    return this.randomAgent.decide(context);
+  }
 
-    if (action?.type === 'witch') {
-      let targetId = null;
-      if (action.target) {
-        const targetNum = parseInt(action.target);
-        if (!isNaN(targetNum) && targetNum > 0 && targetNum <= this.game.players.length) {
-          targetId = this.game.players[targetNum - 1]?.id;
+  // 验证 action 有效性
+  validateAction(action, context) {
+    if (!action) return false;
+
+    // 非目标类 action（如 campaign, withdraw）直接通过
+    if (!action.target && !action.type) return true;
+
+    // 有 type 的 action 需要验证 type
+    if (action.type && !action.type.match(/^(vote|speech|target)$/)) {
+      return true;
+    }
+
+    // 验证目标是否存在且有效
+    if (action.target) {
+      const targetId = parseInt(action.target);
+      const target = context.alivePlayers.find(p => p.id === targetId);
+      if (!target) return false;
+
+      // 检查是否在允许范围内（如投票限制）
+      if (context.extraData?.allowedTargets) {
+        if (!context.extraData.allowedTargets.includes(targetId)) {
+          return false;
         }
       }
-      console.log(`[AI] 女巫 ${player?.name} ${action.action}${targetId ? ` -> ${action.target}号` : ''}`);
-      this.game.useSkill(this.playerId, 'witch', targetId, action.action);
-    } else if (action?.type === 'vote' && action.target) {
-      const targetNum = parseInt(action.target);
-      if (!isNaN(targetNum) && targetNum > 0 && targetNum <= this.game.players.length) {
-        const targetId = this.game.players[targetNum - 1]?.id;
-        const target = this.game.players[targetNum - 1];
-        console.log(`[AI] ${player?.name} 选择目标 ${targetNum}号 ${target?.name}`);
-        // 使用当前阶段
-        this.game.useSkill(this.playerId, context.phase, targetId);
-      }
-    } else if (action?.type === 'skip') {
-      console.log(`[AI] ${player?.name} 跳过技能`);
-      // 对于女巫阶段，需要调用 skip
-      if (context.phase === 'witch') {
-        this.game.useSkill(this.playerId, 'witch', null, 'skip');
-      }
-    } else {
-      console.log(`[AI] ${player?.name} 未知行动类型，跳过`);
     }
 
-    return { success: true };
+    return true;
   }
 
-  // 使用全局能力（接口对齐）
-  useGlobalAbility(abilityId, data) {
-    return this.game.useGlobalAbility(this.playerId, abilityId, data);
-  }
-}
+  // ========== 实现抽象方法 ==========
 
-// AI 管理器
+  async getSpeechResult(visibility = 'public', actionType = 'speak') {
+    const player = this.getPlayer();
+    const context = this.buildContext({ actionType });
+
+    // 根据阶段类型调整 context
+    context.phase = actionType === 'last_words' ? 'last_words' : context.phase;
+    context.action = actionType;
+
+    const action = await this.decide(context);
+    const content = action?.type === 'speech' ? action.content : '过。';
+
+    const logMsg = `[AI] ${player?.name} 发言: ${content}`;
+    getLogger().info(logMsg);
+    getBackendLogger().info(logMsg);
+    return { content, visibility };
+  }
+
+  async getVoteResult(actionType = 'vote', extraData = {}) {
+    const player = this.getPlayer();
+    // 将 actionType 添加到 context 中
+    const context = this.buildContext({ ...extraData, actionType });
+    // 同时设置 action 字段以便 Agent 识别
+    context.action = actionType;
+
+    const action = await this.decide(context);
+    let targetId = null;
+    const isSkipping = action?.type === 'skip'; // 记录是否是故意弃权
+
+    if (action?.type === 'vote' && action.target) {
+      targetId = parseInt(action.target);
+    } else if (action?.type === 'skip') {
+      targetId = null;
+    } else if (action?.target) {
+      targetId = parseInt(action.target);
+    }
+
+    // 只有在不是故意弃权且有目标限制时，才随机选择
+    if (!isSkipping && !targetId && extraData?.allowedTargets?.length > 0) {
+      targetId = extraData.allowedTargets[Math.floor(Math.random() * extraData.allowedTargets.length)];
+    }
+
+    if (targetId) {
+      const target = this.game.players.find(p => p.id === targetId);
+      const pos = this.game.getPosition(targetId);
+      const logMsg = `[AI] ${player?.name} 投票给 ${pos}号 ${target?.name}`;
+      getLogger().info(logMsg);
+      getBackendLogger().info(logMsg);
+    } else {
+      const logMsg = `[AI] ${player?.name} 选择弃权`;
+      getLogger().info(logMsg);
+      getBackendLogger().info(logMsg);
+    }
+
+    return { targetId };
+  }
+
+  async useSkill(actionType, extraData = {}) {
+    const player = this.getPlayer();
+    if (!player) return { success: false, message: '玩家不存在' };
+
+    const skill = this.getSkill(actionType);
+    if (!skill) return { success: false, message: '技能不存在' };
+
+    const validation = this.canUseSkill(skill, extraData);
+    if (!validation.ok) return { success: false, message: validation.message };
+
+    // 构建上下文，包含技能特定信息
+    const context = this.buildContext({ ...extraData, actionType });
+    context.phase = actionType; // 使用技能类型作为阶段标识
+    context.action = actionType;
+
+    // 让 Agent 决策
+    const action = await this.decide(context);
+
+    // 转换 action 格式以适配 executeSkill
+    const normalizedAction = this.normalizeAction(action, actionType, extraData);
+
+    // 合并日志：可选目标 → 决策结果
+    const 可选目标 = this.formatAllowedTargets(actionType, extraData);
+    const logMsg = `[AI] ${player.name} 使用技能 ${actionType}，可选: ${可选目标} → ${JSON.stringify(normalizedAction)}`;
+    getLogger().info(logMsg);
+    getBackendLogger().info(logMsg);
+
+    // 执行技能
+    return this.executeSkill(skill, normalizedAction, extraData);
+  }
+
+  // 格式化可选目标为日志字符串
+  formatAllowedTargets(actionType, extraData) {
+    // choice 类型（如女巫的救/毒/跳过）
+    if (extraData?.healAvailable !== undefined || extraData?.poisonAvailable !== undefined) {
+      const options = [];
+      if (extraData?.healAvailable) options.push('救');
+      if (extraData?.poisonAvailable) options.push('毒');
+      options.push('跳过');
+      return options.join('/');
+    }
+
+    // target 类型（如守卫、预言家、猎人、传警徽、指定发言顺序等）
+    if (extraData?.allowedTargets?.length > 0) {
+      return extraData.allowedTargets.map(id => {
+        const target = this.game.players.find(p => p.id === id);
+        return target ? `${id}号${target.name}` : `${id}号`;
+      }).join(', ');
+    }
+
+    // passBadge 和 assignOrder：从存活玩家中排除自己
+    if (actionType === 'passBadge' || actionType === 'assignOrder') {
+      const player = this.getPlayer();
+      const targets = this.game.players.filter(p => p.alive && p.id !== player?.id);
+      if (targets.length > 0) {
+        return targets.map(p => `${p.id}号${p.name}`).join(', ');
+      }
+      return '无存活玩家';
+    }
+
+    // cupid 类型（连接两个玩家）
+    if (actionType === 'cupid' && extraData?.allowedTargets?.length >= 2) {
+      return extraData.allowedTargets.map(id => `${id}号`).join(', ');
+    }
+
+    return '无';
+  }
+
+  // 标准化 action 格式
+  normalizeAction(action, actionType, extraData) {
+    // 处理特定技能类型的 action 转换
+    switch (actionType) {
+      case 'witch':
+        // 女巫技能：heal/poison/skip
+        if (action?.type === 'heal') {
+          return { action: 'heal' };
+        }
+        if (action?.type === 'poison') {
+          return { action: 'poison', targetId: action.target ? parseInt(action.target) : null };
+        }
+        return { action: 'skip' };
+
+      case 'cupid':
+        // 丘比特连线
+        if (action?.targetIds) {
+          return { targetIds: action.targetIds };
+        }
+        return { targetIds: action?.target ? [parseInt(action.target)] : [] };
+
+      case 'campaign':
+        // 竞选：支持 confirmed 格式（RandomAgent）和 run 格式（测试/MockAI）
+        return { run: action?.confirmed === true || action?.run === true };
+
+      case 'withdraw':
+        // 退水：支持 confirmed 格式和 withdraw 格式（测试/MockAI）
+        return { withdraw: action?.confirmed === true || action?.withdraw === true };
+
+      case 'shoot':
+      case 'passBadge':
+        // 猎人开枪 / 传警徽
+        return { target: action?.target ? parseInt(action.target) : null };
+
+      default:
+        // 默认：target 类型
+        return { target: action?.target ? parseInt(action.target) : null };
+    }
+  }
+
+  }
+
+/**
+ * AI 管理器
+ */
 class AIManager {
   constructor(gameEngine) {
     this.game = gameEngine;
     this.controllers = new Map();
-    this.processing = false; // 防止并发处理
   }
 
   // 创建 AI 控制器
-  createAI(playerId) {
-    const controller = new AIController(playerId, this.game);
+  createAI(playerId, options = {}) {
+    const controller = new AIController(playerId, this.game, options);
     this.controllers.set(playerId, controller);
     return controller;
   }
@@ -206,7 +324,6 @@ class AIManager {
   // 清空
   clear() {
     this.controllers.clear();
-    this.processing = false;
   }
 
   // 获取所有 AI 玩家 ID

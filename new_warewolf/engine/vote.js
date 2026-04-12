@@ -1,0 +1,258 @@
+/**
+ * 投票管理器
+ */
+
+const { getPlayerDisplay } = require('./utils');
+
+class VoteManager {
+  constructor(game) {
+    this.game = game;
+  }
+
+  // 计算投票结果（通用方法）
+  calculateVoteResults(voters, options = {}) {
+    const { useWeight = true, allowEmpty = false } = options;
+    const voteCounts = {};
+    const voteDetails = [];
+
+    for (const voter of voters) {
+      const targetId = this.game.votes[voter.id];
+      const target = targetId ? this.game.players.find(p => p.id === Number(targetId)) : null;
+
+      voteDetails.push({
+        voter: getPlayerDisplay(this.game.players, voter),
+        target: target ? getPlayerDisplay(this.game.players, target) : '弃权'
+      });
+
+      if (targetId || allowEmpty) {
+        const weight = useWeight
+          ? this.game.config.hooks?.getVoteWeight?.(voter, this.game) || 1
+          : 1;
+        const countKey = Number(targetId) || 0;
+        voteCounts[countKey] = (voteCounts[countKey] || 0) + weight;
+      }
+    }
+
+    return { voteCounts, voteDetails };
+  }
+
+  // 计算最高票（通用方法）
+  findMaxVotes(voteCounts) {
+    let maxVotes = 0;
+    let maxPlayer = null;
+
+    Object.entries(voteCounts).forEach(([id, count]) => {
+      if (count > maxVotes) {
+        maxVotes = count;
+        maxPlayer = this.game.players.find(p => p.id === parseInt(id));
+      }
+    });
+
+    return { maxVotes, maxPlayer };
+  }
+
+  // 处理平票（通用方法）
+  findTopVotes(voteCounts, maxVotes) {
+    return Object.entries(voteCounts)
+      .filter(([, count]) => count === maxVotes)
+      .map(([id]) => this.game.players.find(p => p.id === parseInt(id)));
+  }
+
+  // 广播投票结果
+  _broadcastVoteResult(title, voteDetails, voteCounts) {
+    this.game.message.add({
+      type: 'vote_result',
+      content: title,
+      voteDetails,
+      voteCounts,
+      visibility: 'public',
+      bubble: true
+    });
+  }
+
+  // 广播平票消息
+  _broadcastTie(topVotes, message) {
+    this.game.message.add({
+      type: 'vote_tie',
+      content: `${message}：${topVotes.map(p => getPlayerDisplay(this.game.players, p)).join('、')}`,
+      visibility: 'public'
+    });
+  }
+
+  // 处理放逐投票结果
+  _handleBanishResult(maxPlayer) {
+    if (!maxPlayer) return;
+
+    const deathResult = this.game.handleDeath(maxPlayer, 'vote');
+    this.game.lastWordsPlayer = deathResult.lastWordsPlayer;
+
+    if (deathResult.hasLastWords) {
+      this.game.deathQueue.push(maxPlayer);
+    }
+    // 殉情已通过 couple 事件自动处理，无需手动添加
+  }
+
+  // 结算投票（支持PK）
+  async resolve() {
+    const voters = this.game.players.filter(p => p.alive);
+    const { voteCounts, voteDetails } = this.calculateVoteResults(voters, { useWeight: true });
+
+    this._broadcastVoteResult('投票结果', voteDetails, voteCounts);
+
+    const { maxVotes, maxPlayer } = this.findMaxVotes(voteCounts);
+    const topVotes = this.findTopVotes(voteCounts, maxVotes);
+
+    if (topVotes.length > 1) {
+      // 平票，进入PK
+      return await this._resolveBanishPK(topVotes);
+    }
+
+    this._handleBanishResult(maxPlayer);
+    this.game.votes = {};
+    return { done: true };
+  }
+
+  // PK放逐投票
+  async _resolveBanishPK(topVotes) {
+    this._broadcastTie(topVotes, '平票，进入PK');
+
+    // PK投票：所有存活玩家都能投票（包括PK候选人）
+    const pkCandidates = topVotes;
+    const pkVoters = this.game.players.filter(p => p.alive);
+
+    if (pkVoters.length === 0) {
+      // 没有可投票的玩家（比如所有人都平票），无人出局
+      this._broadcastTie(pkCandidates, 'PK无法继续，无人出局');
+      this.game.votes = {};
+      return { done: true };
+    }
+
+    // 清空投票，准备PK
+    this.game.votes = {};
+
+    // 进行PK投票（不带权重）
+    const allowedTargets = pkCandidates.map(c => c.id);
+    await Promise.all(pkVoters.map(voter =>
+      this.game.callVote(voter.id, 'vote', { allowedTargets })
+    ));
+
+    // 计算PK结果
+    const pkResult = this.calculateVoteResults(pkVoters, { useWeight: false });
+    this._broadcastVoteResult('PK投票结果', pkResult.voteDetails, pkResult.voteCounts);
+
+    const { maxVotes: pkMaxVotes } = this.findMaxVotes(pkResult.voteCounts);
+    const pkTopVotes = this.findTopVotes(pkResult.voteCounts, pkMaxVotes);
+
+    if (pkTopVotes.length > 1) {
+      // PK仍平票，无人出局
+      this._broadcastTie(pkTopVotes, 'PK仍平票，无人出局');
+      this.game.votes = {};
+      return { done: true };
+    }
+
+    // PK有结果，放逐最高票玩家
+    const winner = pkTopVotes[0];
+    this._handleBanishResult(winner);
+    this.game.votes = {};
+    return { done: true };
+  }
+
+  // ========== 选举投票 ==========
+
+  // 广播警长当选消息
+  _broadcastSheriffElected(winner, isPK = false) {
+    this.game.message.add({
+      type: 'sheriff_elected',
+      content: `${getPlayerDisplay(this.game.players, winner)} 当选警长${isPK ? '（PK当选）' : ''}`,
+      visibility: 'public',
+      sheriffId: winner.id
+    });
+  }
+
+  // 执行一轮选举投票
+  async _runElectionRound(candidates, voters, useWeight, title) {
+    const allowedTargets = candidates.map(c => c.id);
+    await Promise.all(voters.map(voter =>
+      this.game.callVote(voter.id, 'sheriff_vote', { allowedTargets })
+    ));
+
+    const { voteCounts, voteDetails } = this.calculateVoteResults(voters, { useWeight });
+    this._broadcastVoteResult(title, voteDetails, voteCounts);
+
+    const { maxVotes, maxPlayer: winner } = this.findMaxVotes(voteCounts);
+    const topVotes = this.findTopVotes(voteCounts, maxVotes);
+
+    return { winner, topVotes, voteCounts };
+  }
+
+  // 结算警长选举投票
+  async resolveElection(candidates, voters, allPlayers) {
+    // 边界情况
+    if (candidates.length === 0) {
+      this.game.sheriff = null;
+      this.game.message.add({ type: 'system', content: '无人竞选警长', visibility: 'public' });
+      return { done: true };
+    }
+
+    // 检查是否有存活的警下玩家（非候选人）
+    const offStagePlayers = allPlayers?.filter(p => !p.state?.isCandidate && p.alive) || [];
+    if (offStagePlayers.length === 0 && candidates.length >= 2) {
+      // 所有人都上警，候选人互投是允许的
+      // 继续正常流程
+    } else if (offStagePlayers.length === 0 && candidates.length === 1) {
+      // 只有一人竞选且警下无人，直接当选
+      this.game.sheriff = candidates[0].id;
+      this._broadcastSheriffElected(candidates[0]);
+      return { done: true };
+    }
+
+    if (candidates.length === 1) {
+      this.game.sheriff = candidates[0].id;
+      this._broadcastSheriffElected(candidates[0]);
+      return { done: true };
+    }
+
+    // 第一轮投票
+    const { winner, topVotes } = await this._runElectionRound(candidates, voters, true, '警长投票结果');
+
+    if (topVotes.length > 1) {
+      const result = await this._resolvePK(topVotes);
+      this.game.votes = {};
+      return result;
+    }
+
+    if (winner) {
+      this.game.sheriff = winner.id;
+      this._broadcastSheriffElected(winner);
+    }
+
+    this.game.votes = {};
+    return { done: true };
+  }
+
+  // PK投票
+  async _resolvePK(topVotes) {
+    const pkVoters = this.game.players.filter(p => !p.state?.isCandidate && p.alive);
+
+    if (pkVoters.length === 0) {
+      this.game.sheriff = null;
+      this._broadcastTie(topVotes, '平票，无法PK，无警长');
+      return { done: true };
+    }
+
+    this.game.votes = {};
+    const { winner, topVotes: pkTopVotes } = await this._runElectionRound(topVotes, pkVoters, false, 'PK投票结果');
+
+    if (pkTopVotes.length > 1) {
+      this.game.sheriff = null;
+      this._broadcastTie(pkTopVotes, '再平票，无警长');
+    } else if (winner) {
+      this.game.sheriff = winner.id;
+      this._broadcastSheriffElected(winner, true);
+    }
+
+    return { done: true };
+  }
+}
+
+module.exports = { VoteManager };

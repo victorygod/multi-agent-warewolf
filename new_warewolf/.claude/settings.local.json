@@ -10,7 +10,24 @@
       "Bash(node -c ai/agent.js)",
       "Bash(node -c ai/controller.js)",
       "Bash(node -c ai/prompts.js)",
-      "Bash(timeout 3 node server.js)"
+      "Bash(timeout 3 node server.js)",
+      "Bash(node:*)",
+      "Bash(lsof -ti:3000)",
+      "Bash(xargs kill:*)",
+      "Bash(kill:*)",
+      "Bash(npm test:*)",
+      "Bash(npx jest:*)",
+      "Bash(pkill -f \"node server.js\")",
+      "Bash(timeout 5 npm start)",
+      "Bash(npm start:*)",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(pkill -f \"node test/human-player.test.js\")",
+      "Bash(wait)",
+      "Bash(lsof -i:3000)",
+      "Bash(pkill -f \"node \")",
+      "Bash(chmod +x:*)",
+      "Bash(pkill -f \"npm run dev\")",
+      "Bash(pkill -f \"node.*dev\")"
     ]
   }
 }

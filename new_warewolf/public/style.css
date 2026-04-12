@@ -79,7 +79,6 @@ body {
 .role-badge.villager { background: rgba(149, 165, 166, 0.5); }
 .role-badge.idiot { background: rgba(241, 196, 15, 0.5); }
 .role-badge.cupid { background: rgba(231, 76, 60, 0.5); }
-.role-badge.knight { background: rgba(52, 73, 94, 0.5); }
 
 .teammates {
   color: #aaa;
@@ -143,6 +142,23 @@ body {
 .player-card.empty-slot:hover {
   background: rgba(255, 255, 255, 0.15);
   border-color: var(--primary);
+}
+
+/* 警徽样式 */
+.player-card .sheriff-badge {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 24px;
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,0.3));
+  animation: sheriffPulse 2s infinite;
+  z-index: 10;
+}
+
+@keyframes sheriffPulse {
+  0%, 100% { transform: translateX(-50%) scale(1); }
+  50% { transform: translateX(-50%) scale(1.1); }
 }
 
 .player-position {
@@ -258,6 +274,12 @@ body {
 
 .message.wolf-channel .message-content {
   background: rgba(142, 68, 173, 0.3);
+  border-left: 3px solid var(--wolf);
+}
+
+/* 狼人刀人投票结果 */
+.message.wolf-vote-result .message-content {
+  background: rgba(142, 68, 173, 0.2);
   border-left: 3px solid var(--wolf);
 }
 
@@ -395,6 +417,17 @@ body {
 
 .vote-btn.skip, .skill-btn.skip {
   transform: scale(0.95);
+}
+
+.vote-btn.wolf-target, .skill-btn.wolf-target {
+  background: rgba(231, 76, 60, 0.3);
+  border-color: #e74c3c;
+  color: #ff6b6b;
+}
+
+.vote-btn.wolf-target:hover, .skill-btn.wolf-target:hover {
+  background: #e74c3c;
+  color: #fff;
 }
 
 .skill-btn.heal {

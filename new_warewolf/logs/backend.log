@@ -1,0 +1,256 @@
+1776012268817 [INFO] server.js:415 服务器启动: http://localhost:3000
+1776012288606 [INFO] server.js:375 新连接
+1776012291318 [INFO] engine/phase.js:384 ========== 第 1 天 ==========
+1776012291320 [INFO] engine/phase.js:435 进入阶段: night_werewolf_discuss
+1776012291320 [DEBUG] server.js:149 新消息: phase_start
+1776012291322 [INFO] server.js:340 游戏开始！玩家数：9
+1776012291325 [INFO] ai/controller.js:150 [AI] 小芳 发言: 刀谁？
+1776012291326 [DEBUG] server.js:149 新消息: speech
+1776012291327 [INFO] ai/controller.js:150 [AI] 阿鹏 发言: 我觉得应该刀预言家。
+1776012291327 [DEBUG] server.js:149 新消息: speech
+1776012291328 [INFO] ai/controller.js:150 [AI] 阿华 发言: 先观察一下。
+1776012291328 [DEBUG] server.js:149 新消息: speech
+1776012291329 [INFO] engine/phase.js:448 阶段完成: night_werewolf_discuss
+1776012291329 [INFO] engine/phase.js:435 进入阶段: night_werewolf_vote
+1776012291329 [DEBUG] server.js:149 新消息: phase_start
+1776012291331 [INFO] ai/controller.js:183 [AI] 小芳 投票给 5号 小玲
+1776012291331 [INFO] ai/controller.js:183 [AI] 阿鹏 投票给 7号 小燕
+1776012291332 [INFO] ai/controller.js:183 [AI] 阿华 投票给 2号 小芳
+1776012291332 [DEBUG] server.js:149 新消息: wolf_vote_result
+1776012291333 [INFO] engine/phase.js:448 阶段完成: night_werewolf_vote
+1776012291333 [INFO] engine/phase.js:435 进入阶段: witch
+1776012291334 [DEBUG] server.js:149 新消息: phase_start
+1776012291335 [INFO] ai/controller.js:218 [AI] 小玲 使用技能 witch，可选: 救/毒/跳过 → {"action":"poison","target":7}
+1776012291336 [INFO] engine/phase.js:448 阶段完成: witch
+1776012291337 [INFO] engine/phase.js:435 进入阶段: seer
+1776012291337 [DEBUG] server.js:149 新消息: phase_start
+1776012291338 [INFO] engine/player.js:263 a 使用技能 seer，可选: 4号阿明, 5号小芳, 6号阿鹏, 8号强子, 9号小玲, 7号小燕, 3号阿华, 2号小霞
+1776012291338 [INFO] server.js:139 请求 a 行动: seer
+1776012292877 [DEBUG] server.js:261 收到响应: playerId=1
+1776012292878 [DEBUG] server.js:263 handleResponse 结果: true
+1776012292879 [DEBUG] server.js:149 新消息: action
+1776012292879 [INFO] engine/phase.js:448 阶段完成: seer
+1776012292879 [INFO] engine/phase.js:435 进入阶段: sheriff_campaign
+1776012292879 [DEBUG] server.js:149 新消息: phase_start
+1776012292880 [INFO] ai/controller.js:218 [AI] 阿明 使用技能 campaign，可选: 无 → {"run":false}
+1776012292881 [INFO] ai/controller.js:218 [AI] 小芳 使用技能 campaign，可选: 无 → {"run":true}
+1776012292881 [INFO] ai/controller.js:218 [AI] 阿鹏 使用技能 campaign，可选: 无 → {"run":true}
+1776012292882 [INFO] ai/controller.js:218 [AI] 强子 使用技能 campaign，可选: 无 → {"run":false}
+1776012292882 [INFO] ai/controller.js:218 [AI] 小玲 使用技能 campaign，可选: 无 → {"run":false}
+1776012292882 [INFO] engine/player.js:263 a 使用技能 campaign，可选: 无
+1776012292882 [INFO] server.js:139 请求 a 行动: campaign
+1776012294398 [DEBUG] server.js:261 收到响应: playerId=1
+1776012294399 [DEBUG] server.js:263 handleResponse 结果: true
+1776012294400 [INFO] ai/controller.js:218 [AI] 小燕 使用技能 campaign，可选: 无 → {"run":true}
+1776012294401 [INFO] ai/controller.js:218 [AI] 阿华 使用技能 campaign，可选: 无 → {"run":false}
+1776012294401 [INFO] ai/controller.js:218 [AI] 小霞 使用技能 campaign，可选: 无 → {"run":true}
+1776012294401 [DEBUG] server.js:149 新消息: sheriff_candidates
+1776012294401 [INFO] engine/phase.js:448 阶段完成: sheriff_campaign
+1776012294401 [INFO] engine/phase.js:435 进入阶段: sheriff_speech
+1776012294402 [DEBUG] server.js:149 新消息: phase_start
+1776012294402 [INFO] ai/controller.js:150 [AI] 小芳 发言: 我昨晚查验了某人。
+1776012294402 [DEBUG] server.js:149 新消息: speech
+1776012294402 [INFO] ai/controller.js:150 [AI] 阿鹏 发言: 请大家投我一票。
+1776012294402 [DEBUG] server.js:149 新消息: speech
+1776012294403 [INFO] server.js:139 请求 a 行动: speak
+1776012297041 [DEBUG] server.js:261 收到响应: playerId=1
+1776012297042 [DEBUG] server.js:263 handleResponse 结果: true
+1776012297042 [DEBUG] server.js:149 新消息: speech
+1776012297043 [INFO] ai/controller.js:150 [AI] 小燕 发言: 请大家投我一票。
+1776012297043 [DEBUG] server.js:149 新消息: speech
+1776012297043 [INFO] ai/controller.js:150 [AI] 小霞 发言: 我昨晚查验了某人。
+1776012297044 [DEBUG] server.js:149 新消息: speech
+1776012297044 [INFO] ai/controller.js:218 [AI] 小芳 使用技能 withdraw，可选: 无 → {"withdraw":true}
+1776012297045 [DEBUG] server.js:149 新消息: system
+1776012297045 [INFO] ai/controller.js:218 [AI] 阿鹏 使用技能 withdraw，可选: 无 → {"withdraw":false}
+1776012297046 [INFO] engine/player.js:263 a 使用技能 withdraw，可选: 无
+1776012297046 [INFO] server.js:139 请求 a 行动: withdraw
+1776012298775 [DEBUG] server.js:261 收到响应: playerId=1
+1776012298776 [DEBUG] server.js:263 handleResponse 结果: true
+1776012298779 [INFO] ai/controller.js:218 [AI] 小燕 使用技能 withdraw，可选: 无 → {"withdraw":false}
+1776012298781 [INFO] ai/controller.js:218 [AI] 小霞 使用技能 withdraw，可选: 无 → {"withdraw":true}
+1776012298782 [DEBUG] server.js:149 新消息: system
+1776012298782 [INFO] engine/phase.js:448 阶段完成: sheriff_speech
+1776012298783 [INFO] engine/phase.js:435 进入阶段: sheriff_vote
+1776012298783 [DEBUG] server.js:149 新消息: phase_start
+1776012298784 [INFO] ai/controller.js:183 [AI] 阿明 投票给 7号 小燕
+1776012298785 [INFO] ai/controller.js:187 [AI] 强子 选择弃权
+1776012298787 [INFO] ai/controller.js:183 [AI] 小玲 投票给 3号 阿鹏
+1776012298788 [INFO] ai/controller.js:183 [AI] 阿华 投票给 6号 a
+1776012298789 [DEBUG] server.js:149 新消息: vote_result
+1776012298790 [INFO] ai/controller.js:183 [AI] 阿明 投票给 3号 阿鹏
+1776012298791 [INFO] ai/controller.js:183 [AI] 强子 投票给 7号 小燕
+1776012298792 [INFO] ai/controller.js:183 [AI] 小玲 投票给 3号 阿鹏
+1776012298792 [INFO] ai/controller.js:183 [AI] 阿华 投票给 7号 小燕
+1776012298793 [DEBUG] server.js:149 新消息: vote_result
+1776012298793 [DEBUG] server.js:149 新消息: vote_tie
+1776012298793 [INFO] engine/phase.js:448 阶段完成: sheriff_vote
+1776012298794 [INFO] engine/phase.js:435 进入阶段: day_announce
+1776012298794 [DEBUG] server.js:149 新消息: phase_start
+1776012298795 [DEBUG] server.js:149 新消息: death_announce
+1776012298795 [INFO] engine/phase.js:448 阶段完成: day_announce
+1776012298795 [INFO] engine/phase.js:435 进入阶段: day_discuss
+1776012298796 [DEBUG] server.js:149 新消息: phase_start
+1776012298797 [INFO] ai/controller.js:150 [AI] 阿明 发言: 我昨晚查验了某人。
+1776012298797 [DEBUG] server.js:149 新消息: speech
+1776012298797 [INFO] ai/controller.js:150 [AI] 小芳 发言: 过。
+1776012298798 [DEBUG] server.js:149 新消息: speech
+1776012298798 [INFO] ai/controller.js:150 [AI] 阿鹏 发言: 过。
+1776012298798 [DEBUG] server.js:149 新消息: speech
+1776012298799 [INFO] ai/controller.js:150 [AI] 强子 发言: 请大家投我一票。
+1776012298799 [DEBUG] server.js:149 新消息: speech
+1776012298800 [INFO] server.js:139 请求 a 行动: speak
+1776012380278 [DEBUG] server.js:261 收到响应: playerId=1
+1776012380280 [DEBUG] server.js:263 handleResponse 结果: true
+1776012380281 [DEBUG] server.js:149 新消息: speech
+1776012380283 [INFO] ai/controller.js:150 [AI] 小燕 发言: 我是神职，有信息。
+1776012380283 [DEBUG] server.js:149 新消息: speech
+1776012380284 [INFO] ai/controller.js:150 [AI] 阿华 发言: 请大家投我一票。
+1776012380284 [DEBUG] server.js:149 新消息: speech
+1776012380285 [INFO] ai/controller.js:150 [AI] 小霞 发言: 我觉得某人很可疑。
+1776012380285 [DEBUG] server.js:149 新消息: speech
+1776012380285 [INFO] engine/phase.js:448 阶段完成: day_discuss
+1776012380286 [INFO] engine/phase.js:435 进入阶段: day_vote
+1776012380286 [DEBUG] server.js:149 新消息: phase_start
+1776012380287 [INFO] server.js:139 请求 a 行动: vote
+1776012380290 [INFO] ai/controller.js:187 [AI] 阿明 选择弃权
+1776012380290 [INFO] ai/controller.js:183 [AI] 小芳 投票给 6号 a
+1776012380292 [INFO] ai/controller.js:183 [AI] 阿鹏 投票给 1号 阿明
+1776012380292 [INFO] ai/controller.js:183 [AI] 强子 投票给 3号 阿鹏
+1776012380293 [INFO] ai/controller.js:183 [AI] 小燕 投票给 6号 a
+1776012380295 [INFO] ai/controller.js:183 [AI] 阿华 投票给 6号 a
+1776012380297 [INFO] ai/controller.js:187 [AI] 小霞 选择弃权
+1776012382821 [DEBUG] server.js:261 收到响应: playerId=1
+1776012382822 [DEBUG] server.js:263 handleResponse 结果: true
+1776012382822 [INFO] engine/phase.js:448 阶段完成: day_vote
+1776012382823 [INFO] engine/phase.js:435 进入阶段: post_vote
+1776012382824 [DEBUG] server.js:149 新消息: phase_start
+1776012382824 [DEBUG] server.js:149 新消息: vote_result
+1776012382825 [INFO] server.js:139 请求 a 行动: last_words
+1776012391141 [DEBUG] server.js:261 收到响应: playerId=1
+1776012391141 [DEBUG] server.js:263 handleResponse 结果: true
+1776012391142 [DEBUG] server.js:149 新消息: last_words
+1776012391142 [INFO] engine/phase.js:448 阶段完成: post_vote
+1776012391143 [INFO] engine/phase.js:384 ========== 第 3 天 ==========
+1776012391143 [INFO] engine/phase.js:435 进入阶段: night_werewolf_discuss
+1776012391143 [DEBUG] server.js:149 新消息: phase_start
+1776012391143 [INFO] ai/controller.js:150 [AI] 小芳 发言: 我觉得应该刀预言家。
+1776012391143 [DEBUG] server.js:149 新消息: speech
+1776012391144 [INFO] ai/controller.js:150 [AI] 阿鹏 发言: 同意。
+1776012391144 [DEBUG] server.js:149 新消息: speech
+1776012391144 [INFO] ai/controller.js:150 [AI] 阿华 发言: 先观察一下。
+1776012391145 [DEBUG] server.js:149 新消息: speech
+1776012391145 [INFO] engine/phase.js:448 阶段完成: night_werewolf_discuss
+1776012391145 [INFO] engine/phase.js:435 进入阶段: night_werewolf_vote
+1776012391145 [DEBUG] server.js:149 新消息: phase_start
+1776012391145 [INFO] ai/controller.js:183 [AI] 小芳 投票给 3号 阿鹏
+1776012391145 [INFO] ai/controller.js:183 [AI] 阿鹏 投票给 1号 阿明
+1776012391146 [INFO] ai/controller.js:183 [AI] 阿华 投票给 7号 小燕
+1776012391146 [DEBUG] server.js:149 新消息: wolf_vote_result
+1776012391146 [INFO] engine/phase.js:448 阶段完成: night_werewolf_vote
+1776012391146 [INFO] engine/phase.js:435 进入阶段: witch
+1776012391147 [DEBUG] server.js:149 新消息: phase_start
+1776012391147 [INFO] engine/phase.js:448 阶段完成: witch
+1776012391147 [INFO] engine/phase.js:435 进入阶段: seer
+1776012391147 [DEBUG] server.js:149 新消息: phase_start
+1776012391147 [INFO] engine/phase.js:448 阶段完成: seer
+1776012391148 [INFO] engine/phase.js:435 进入阶段: day_announce
+1776012391148 [DEBUG] server.js:149 新消息: phase_start
+1776012391148 [DEBUG] server.js:149 新消息: death_announce
+1776012391148 [INFO] engine/phase.js:448 阶段完成: day_announce
+1776012391148 [INFO] engine/phase.js:435 进入阶段: day_discuss
+1776012391148 [DEBUG] server.js:149 新消息: phase_start
+1776012391149 [INFO] ai/controller.js:150 [AI] 阿明 发言: 过。
+1776012391149 [DEBUG] server.js:149 新消息: speech
+1776012391149 [INFO] ai/controller.js:150 [AI] 小芳 发言: 我昨晚查验了某人。
+1776012391150 [DEBUG] server.js:149 新消息: speech
+1776012391150 [INFO] ai/controller.js:150 [AI] 阿鹏 发言: 请大家投我一票。
+1776012391150 [DEBUG] server.js:149 新消息: speech
+1776012391150 [INFO] ai/controller.js:150 [AI] 强子 发言: 我觉得某人很可疑。
+1776012391150 [DEBUG] server.js:149 新消息: speech
+1776012391151 [INFO] ai/controller.js:150 [AI] 阿华 发言: 请大家投我一票。
+1776012391151 [DEBUG] server.js:149 新消息: speech
+1776012391151 [INFO] ai/controller.js:150 [AI] 小霞 发言: 我是好人，请大家相信我。
+1776012391151 [DEBUG] server.js:149 新消息: speech
+1776012391151 [INFO] engine/phase.js:448 阶段完成: day_discuss
+1776012391151 [INFO] engine/phase.js:435 进入阶段: day_vote
+1776012391152 [DEBUG] server.js:149 新消息: phase_start
+1776012391152 [INFO] ai/controller.js:187 [AI] 阿明 选择弃权
+1776012391153 [INFO] ai/controller.js:183 [AI] 小芳 投票给 9号 小霞
+1776012391153 [INFO] ai/controller.js:183 [AI] 阿鹏 投票给 8号 阿华
+1776012391154 [INFO] ai/controller.js:187 [AI] 强子 选择弃权
+1776012391154 [INFO] ai/controller.js:187 [AI] 阿华 选择弃权
+1776012391154 [INFO] ai/controller.js:183 [AI] 小霞 投票给 1号 阿明
+1776012391154 [INFO] engine/phase.js:448 阶段完成: day_vote
+1776012391154 [INFO] engine/phase.js:435 进入阶段: post_vote
+1776012391154 [DEBUG] server.js:149 新消息: phase_start
+1776012391155 [DEBUG] server.js:149 新消息: vote_result
+1776012391155 [DEBUG] server.js:149 新消息: vote_tie
+1776012391155 [INFO] ai/controller.js:187 [AI] 阿明 选择弃权
+1776012391155 [INFO] ai/controller.js:187 [AI] 小芳 选择弃权
+1776012391156 [INFO] ai/controller.js:187 [AI] 阿鹏 选择弃权
+1776012391156 [INFO] ai/controller.js:187 [AI] 强子 选择弃权
+1776012391156 [INFO] ai/controller.js:187 [AI] 阿华 选择弃权
+1776012391157 [INFO] ai/controller.js:187 [AI] 小霞 选择弃权
+1776012391157 [DEBUG] server.js:149 新消息: vote_result
+1776012391157 [INFO] server.js:139 请求 a 行动: last_words
+1776012691100 [ERROR] engine/phase.js:450 执行阶段 post_vote 失败: 操作超时
+1776012691102 [INFO] engine/phase.js:384 ========== 第 4 天 ==========
+1776012691102 [INFO] engine/phase.js:435 进入阶段: night_werewolf_discuss
+1776012691102 [DEBUG] server.js:149 新消息: phase_start
+1776012691103 [INFO] ai/controller.js:150 [AI] 小芳 发言: 刀谁？
+1776012691104 [DEBUG] server.js:149 新消息: speech
+1776012691104 [INFO] ai/controller.js:150 [AI] 阿鹏 发言: 先观察一下。
+1776012691104 [DEBUG] server.js:149 新消息: speech
+1776012691105 [INFO] ai/controller.js:150 [AI] 阿华 发言: 先观察一下。
+1776012691105 [DEBUG] server.js:149 新消息: speech
+1776012691105 [INFO] engine/phase.js:448 阶段完成: night_werewolf_discuss
+1776012691105 [INFO] engine/phase.js:435 进入阶段: night_werewolf_vote
+1776012691105 [DEBUG] server.js:149 新消息: phase_start
+1776012691106 [INFO] ai/controller.js:183 [AI] 小芳 投票给 8号 阿华
+1776012691106 [INFO] ai/controller.js:183 [AI] 阿鹏 投票给 3号 阿鹏
+1776012691106 [INFO] ai/controller.js:183 [AI] 阿华 投票给 8号 阿华
+1776012691106 [DEBUG] server.js:149 新消息: wolf_vote_result
+1776012691107 [INFO] engine/phase.js:448 阶段完成: night_werewolf_vote
+1776012691107 [INFO] engine/phase.js:435 进入阶段: witch
+1776012691107 [DEBUG] server.js:149 新消息: phase_start
+1776012691107 [INFO] engine/phase.js:448 阶段完成: witch
+1776012691107 [INFO] engine/phase.js:435 进入阶段: seer
+1776012691107 [DEBUG] server.js:149 新消息: phase_start
+1776012691107 [INFO] engine/phase.js:448 阶段完成: seer
+1776012691107 [INFO] engine/phase.js:435 进入阶段: day_announce
+1776012691108 [DEBUG] server.js:149 新消息: phase_start
+1776012691108 [DEBUG] server.js:149 新消息: death_announce
+1776012691108 [INFO] engine/phase.js:448 阶段完成: day_announce
+1776012691108 [INFO] engine/phase.js:435 进入阶段: day_discuss
+1776012691108 [DEBUG] server.js:149 新消息: phase_start
+1776012691108 [INFO] ai/controller.js:150 [AI] 阿明 发言: 我是神职，有信息。
+1776012691108 [DEBUG] server.js:149 新消息: speech
+1776012691109 [INFO] ai/controller.js:150 [AI] 小芳 发言: 我怀疑有人是狼人。
+1776012691109 [DEBUG] server.js:149 新消息: speech
+1776012691109 [INFO] ai/controller.js:150 [AI] 阿鹏 发言: 我觉得某人很可疑。
+1776012691110 [DEBUG] server.js:149 新消息: speech
+1776012691110 [INFO] ai/controller.js:150 [AI] 强子 发言: 过。
+1776012691110 [DEBUG] server.js:149 新消息: speech
+1776012691110 [INFO] ai/controller.js:150 [AI] 小霞 发言: 我是好人，请大家相信我。
+1776012691111 [DEBUG] server.js:149 新消息: speech
+1776012691111 [INFO] engine/phase.js:448 阶段完成: day_discuss
+1776012691111 [INFO] engine/phase.js:435 进入阶段: day_vote
+1776012691111 [DEBUG] server.js:149 新消息: phase_start
+1776012691111 [INFO] ai/controller.js:187 [AI] 阿明 选择弃权
+1776012691112 [INFO] ai/controller.js:183 [AI] 小芳 投票给 1号 阿明
+1776012691112 [INFO] ai/controller.js:183 [AI] 阿鹏 投票给 1号 阿明
+1776012691112 [INFO] ai/controller.js:183 [AI] 强子 投票给 2号 小芳
+1776012691112 [INFO] ai/controller.js:183 [AI] 小霞 投票给 4号 强子
+1776012691112 [INFO] engine/phase.js:448 阶段完成: day_vote
+1776012691112 [INFO] engine/phase.js:435 进入阶段: post_vote
+1776012691113 [DEBUG] server.js:149 新消息: phase_start
+1776012691113 [DEBUG] server.js:149 新消息: vote_result
+1776012691113 [INFO] ai/controller.js:150 [AI] 阿明 发言: 我昨晚查验了某人。
+1776012691113 [DEBUG] server.js:149 新消息: last_words
+1776012691114 [INFO] ai/controller.js:218 [AI] 阿明 使用技能 shoot，可选: 5号小芳, 6号阿鹏, 8号强子, 2号小霞 → {"target":5}
+1776012691114 [DEBUG] server.js:149 新消息: action
+1776012691114 [INFO] engine/phase.js:448 阶段完成: post_vote
+1776012691114 [INFO] engine/phase.js:459 游戏结束，胜者: wolf
+1776012691115 [DEBUG] server.js:149 新消息: game_over
+1776012691115 [INFO] engine/phase.js:421 PhaseManager 停止

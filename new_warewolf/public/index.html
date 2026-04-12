@@ -51,12 +51,27 @@
           <option value="16">16人局</option>
         </select>
       </div>
+      <div id="debug-role-group" class="form-group hidden">
+        <label>Debug 模式 - 选择身份：</label>
+        <select id="debug-role-select">
+          <option value="">随机</option>
+          <option value="werewolf">狼人</option>
+          <option value="seer">预言家</option>
+          <option value="witch">女巫</option>
+          <option value="guard">守卫</option>
+          <option value="hunter">猎人</option>
+          <option value="villager">村民</option>
+          <option value="idiot">白痴</option>
+          <option value="cupid">丘比特</option>
+        </select>
+      </div>
       <div class="buttons">
         <button id="ready-btn">准备</button>
       </div>
     </div>
   </div>
 
+  <script src="logger.js"></script>
   <script src="controller.js"></script>
   <script src="app.js"></script>
 </body>

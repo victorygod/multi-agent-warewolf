@@ -1,0 +1,87 @@
+1776012291324 [INFO] ai/controller.js:149 [AI] 小芳 发言: 刀谁？
+1776012291327 [INFO] ai/controller.js:149 [AI] 阿鹏 发言: 我觉得应该刀预言家。
+1776012291328 [INFO] ai/controller.js:149 [AI] 阿华 发言: 先观察一下。
+1776012291330 [INFO] ai/controller.js:182 [AI] 小芳 投票给 5号 小玲
+1776012291331 [INFO] ai/controller.js:182 [AI] 阿鹏 投票给 7号 小燕
+1776012291332 [INFO] ai/controller.js:182 [AI] 阿华 投票给 2号 小芳
+1776012291335 [INFO] ai/controller.js:217 [AI] 小玲 使用技能 witch，可选: 救/毒/跳过 → {"action":"poison","target":7}
+1776012292880 [INFO] ai/controller.js:217 [AI] 阿明 使用技能 campaign，可选: 无 → {"run":false}
+1776012292881 [INFO] ai/controller.js:217 [AI] 小芳 使用技能 campaign，可选: 无 → {"run":true}
+1776012292881 [INFO] ai/controller.js:217 [AI] 阿鹏 使用技能 campaign，可选: 无 → {"run":true}
+1776012292881 [INFO] ai/controller.js:217 [AI] 强子 使用技能 campaign，可选: 无 → {"run":false}
+1776012292882 [INFO] ai/controller.js:217 [AI] 小玲 使用技能 campaign，可选: 无 → {"run":false}
+1776012294400 [INFO] ai/controller.js:217 [AI] 小燕 使用技能 campaign，可选: 无 → {"run":true}
+1776012294400 [INFO] ai/controller.js:217 [AI] 阿华 使用技能 campaign，可选: 无 → {"run":false}
+1776012294401 [INFO] ai/controller.js:217 [AI] 小霞 使用技能 campaign，可选: 无 → {"run":true}
+1776012294402 [INFO] ai/controller.js:149 [AI] 小芳 发言: 我昨晚查验了某人。
+1776012294402 [INFO] ai/controller.js:149 [AI] 阿鹏 发言: 请大家投我一票。
+1776012297042 [INFO] ai/controller.js:149 [AI] 小燕 发言: 请大家投我一票。
+1776012297043 [INFO] ai/controller.js:149 [AI] 小霞 发言: 我昨晚查验了某人。
+1776012297044 [INFO] ai/controller.js:217 [AI] 小芳 使用技能 withdraw，可选: 无 → {"withdraw":true}
+1776012297045 [INFO] ai/controller.js:217 [AI] 阿鹏 使用技能 withdraw，可选: 无 → {"withdraw":false}
+1776012298777 [INFO] ai/controller.js:217 [AI] 小燕 使用技能 withdraw，可选: 无 → {"withdraw":false}
+1776012298781 [INFO] ai/controller.js:217 [AI] 小霞 使用技能 withdraw，可选: 无 → {"withdraw":true}
+1776012298784 [INFO] ai/controller.js:182 [AI] 阿明 投票给 7号 小燕
+1776012298785 [INFO] ai/controller.js:186 [AI] 强子 选择弃权
+1776012298786 [INFO] ai/controller.js:182 [AI] 小玲 投票给 3号 阿鹏
+1776012298788 [INFO] ai/controller.js:182 [AI] 阿华 投票给 6号 a
+1776012298789 [INFO] ai/controller.js:182 [AI] 阿明 投票给 3号 阿鹏
+1776012298790 [INFO] ai/controller.js:182 [AI] 强子 投票给 7号 小燕
+1776012298791 [INFO] ai/controller.js:182 [AI] 小玲 投票给 3号 阿鹏
+1776012298792 [INFO] ai/controller.js:182 [AI] 阿华 投票给 7号 小燕
+1776012298796 [INFO] ai/controller.js:149 [AI] 阿明 发言: 我昨晚查验了某人。
+1776012298797 [INFO] ai/controller.js:149 [AI] 小芳 发言: 过。
+1776012298798 [INFO] ai/controller.js:149 [AI] 阿鹏 发言: 过。
+1776012298799 [INFO] ai/controller.js:149 [AI] 强子 发言: 请大家投我一票。
+1776012380282 [INFO] ai/controller.js:149 [AI] 小燕 发言: 我是神职，有信息。
+1776012380284 [INFO] ai/controller.js:149 [AI] 阿华 发言: 请大家投我一票。
+1776012380284 [INFO] ai/controller.js:149 [AI] 小霞 发言: 我觉得某人很可疑。
+1776012380289 [INFO] ai/controller.js:186 [AI] 阿明 选择弃权
+1776012380290 [INFO] ai/controller.js:182 [AI] 小芳 投票给 6号 a
+1776012380291 [INFO] ai/controller.js:182 [AI] 阿鹏 投票给 1号 阿明
+1776012380292 [INFO] ai/controller.js:182 [AI] 强子 投票给 3号 阿鹏
+1776012380292 [INFO] ai/controller.js:182 [AI] 小燕 投票给 6号 a
+1776012380294 [INFO] ai/controller.js:182 [AI] 阿华 投票给 6号 a
+1776012380296 [INFO] ai/controller.js:186 [AI] 小霞 选择弃权
+1776012391143 [INFO] ai/controller.js:149 [AI] 小芳 发言: 我觉得应该刀预言家。
+1776012391144 [INFO] ai/controller.js:149 [AI] 阿鹏 发言: 同意。
+1776012391144 [INFO] ai/controller.js:149 [AI] 阿华 发言: 先观察一下。
+1776012391145 [INFO] ai/controller.js:182 [AI] 小芳 投票给 3号 阿鹏
+1776012391145 [INFO] ai/controller.js:182 [AI] 阿鹏 投票给 1号 阿明
+1776012391146 [INFO] ai/controller.js:182 [AI] 阿华 投票给 7号 小燕
+1776012391148 [INFO] ai/controller.js:149 [AI] 阿明 发言: 过。
+1776012391149 [INFO] ai/controller.js:149 [AI] 小芳 发言: 我昨晚查验了某人。
+1776012391150 [INFO] ai/controller.js:149 [AI] 阿鹏 发言: 请大家投我一票。
+1776012391150 [INFO] ai/controller.js:149 [AI] 强子 发言: 我觉得某人很可疑。
+1776012391151 [INFO] ai/controller.js:149 [AI] 阿华 发言: 请大家投我一票。
+1776012391151 [INFO] ai/controller.js:149 [AI] 小霞 发言: 我是好人，请大家相信我。
+1776012391152 [INFO] ai/controller.js:186 [AI] 阿明 选择弃权
+1776012391153 [INFO] ai/controller.js:182 [AI] 小芳 投票给 9号 小霞
+1776012391153 [INFO] ai/controller.js:182 [AI] 阿鹏 投票给 8号 阿华
+1776012391153 [INFO] ai/controller.js:186 [AI] 强子 选择弃权
+1776012391154 [INFO] ai/controller.js:186 [AI] 阿华 选择弃权
+1776012391154 [INFO] ai/controller.js:182 [AI] 小霞 投票给 1号 阿明
+1776012391155 [INFO] ai/controller.js:186 [AI] 阿明 选择弃权
+1776012391155 [INFO] ai/controller.js:186 [AI] 小芳 选择弃权
+1776012391156 [INFO] ai/controller.js:186 [AI] 阿鹏 选择弃权
+1776012391156 [INFO] ai/controller.js:186 [AI] 强子 选择弃权
+1776012391156 [INFO] ai/controller.js:186 [AI] 阿华 选择弃权
+1776012391156 [INFO] ai/controller.js:186 [AI] 小霞 选择弃权
+1776012691103 [INFO] ai/controller.js:149 [AI] 小芳 发言: 刀谁？
+1776012691104 [INFO] ai/controller.js:149 [AI] 阿鹏 发言: 先观察一下。
+1776012691104 [INFO] ai/controller.js:149 [AI] 阿华 发言: 先观察一下。
+1776012691106 [INFO] ai/controller.js:182 [AI] 小芳 投票给 8号 阿华
+1776012691106 [INFO] ai/controller.js:182 [AI] 阿鹏 投票给 3号 阿鹏
+1776012691106 [INFO] ai/controller.js:182 [AI] 阿华 投票给 8号 阿华
+1776012691108 [INFO] ai/controller.js:149 [AI] 阿明 发言: 我是神职，有信息。
+1776012691109 [INFO] ai/controller.js:149 [AI] 小芳 发言: 我怀疑有人是狼人。
+1776012691109 [INFO] ai/controller.js:149 [AI] 阿鹏 发言: 我觉得某人很可疑。
+1776012691110 [INFO] ai/controller.js:149 [AI] 强子 发言: 过。
+1776012691110 [INFO] ai/controller.js:149 [AI] 小霞 发言: 我是好人，请大家相信我。
+1776012691111 [INFO] ai/controller.js:186 [AI] 阿明 选择弃权
+1776012691111 [INFO] ai/controller.js:182 [AI] 小芳 投票给 1号 阿明
+1776012691112 [INFO] ai/controller.js:182 [AI] 阿鹏 投票给 1号 阿明
+1776012691112 [INFO] ai/controller.js:182 [AI] 强子 投票给 2号 小芳
+1776012691112 [INFO] ai/controller.js:182 [AI] 小霞 投票给 4号 强子
+1776012691113 [INFO] ai/controller.js:149 [AI] 阿明 发言: 我昨晚查验了某人。
+1776012691114 [INFO] ai/controller.js:217 [AI] 阿明 使用技能 shoot，可选: 5号小芳, 6号阿鹏, 8号强子, 2号小霞 → {"target":5}
