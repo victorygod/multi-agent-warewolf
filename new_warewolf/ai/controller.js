@@ -141,7 +141,6 @@ class AIController extends PlayerController {
 
     const logMsg = `[AI] ${player?.name} 发言: ${content}`;
     getLogger().info(logMsg);
-    getLogger().info(logMsg);
     return { content, visibility };
   }
 

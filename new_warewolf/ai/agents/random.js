@@ -289,8 +289,9 @@ class RandomAgent {
     // 使用 prompts.js 中的 getPhasePrompt
     const phasePrompt = getPhasePrompt(context.phase, promptContext);
 
-    // 使用 context.js 中的 formatMessageHistory
-    const historyText = formatMessageHistory(context.messages, this.game.players) || '无';
+    // 使用 context.js 中的 formatMessageHistory（传入当前玩家以判断是否显示狼人子标题）
+    const currentPlayer = this.game.players.find(p => p.id === this.playerId);
+    const historyText = formatMessageHistory(context.messages, this.game.players, currentPlayer) || '无';
 
     // 组合完整上下文
     const fullContext = `

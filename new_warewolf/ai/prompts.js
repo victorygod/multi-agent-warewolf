@@ -58,9 +58,18 @@ const PHASE_PROMPTS = {
   seer: (aliveList) => `【预言家】可选玩家：\n${aliveList}\n请选择要查验的玩家。以JSON格式返回: {"type": "target", "target": 位置编号}`,
   guard: (aliveList) => `【守卫】可选玩家：\n${aliveList}\n请选择要守护的玩家。以JSON格式返回: {"type": "target", "target": 位置编号}`,
   day_discuss: () => '【白天发言】轮到你发言了，请分析局势，简要发言。以JSON格式返回: {"type": "speech", "content": "你说的话"}',
-  day_vote: (aliveList) => {
-    // day_vote 直接使用 aliveList（所有存活玩家，排除自己由前端/AI处理）
-    return `【白天投票】可选玩家：\n${aliveList}\n请选择要放逐的玩家。以JSON格式返回: {"type": "vote", "target": 位置编号} 或 {"type": "skip"} 弃权`;
+  day_vote: (aliveList, context) => {
+    // 使用 allowedTargets 显示实际可选玩家（排除自己）
+    const allowedTargets = context?.extraData?.allowedTargets;
+    let targetList = aliveList;
+    if (allowedTargets && allowedTargets.length > 0) {
+      const candidates = context.game.players.filter(p => allowedTargets.includes(p.id));
+      targetList = candidates.map(p => {
+        const pos = context.game.players.findIndex(gp => gp.id === p.id) + 1;
+        return `${pos}号: ${p.name}`;
+      }).join('\n');
+    }
+    return `【白天投票】可选玩家：\n${targetList}\n请选择要放逐的玩家。以JSON格式返回: {"type": "vote", "target": 位置编号} 或 {"type": "skip"} 弃权`;
   },
   // 放逐后处理（PK投票等）
   post_vote: (aliveList, context) => {
@@ -95,7 +104,19 @@ const PHASE_PROMPTS = {
   cupid: (aliveList) => `【丘比特】可选玩家：\n${aliveList}\n请选择两名玩家连接为情侣。以JSON格式返回: {"type": "cupid", "targets": [位置编号1, 位置编号2]}`,
   shoot: (aliveList) => `【猎人开枪】可选玩家：\n${aliveList}\n你已死亡，可以选择开枪带走一名玩家。以JSON格式返回: {"type": "shoot", "target": 位置编号} 或 {"type": "skip"} 放弃开枪`,
   pass_badge: (aliveList) => `【传警徽】可选玩家：\n${aliveList}\n你是警长，已死亡。请选择将警徽传给谁。以JSON格式返回: {"type": "pass_badge", "target": 位置编号} 或 {"type": "skip"} 不传`,
-  assignOrder: (aliveList) => `【指定发言顺序】可选玩家：\n${aliveList}\n你是警长，请指定从哪位玩家开始发言。以JSON格式返回: {"type": "assignOrder", "target": 位置编号}`,
+  assignOrder: (aliveList, context) => {
+    // 使用 allowedTargets 排除自己
+    const allowedTargets = context?.extraData?.allowedTargets;
+    let targetList = aliveList;
+    if (allowedTargets && allowedTargets.length > 0) {
+      const candidates = context.game.players.filter(p => allowedTargets.includes(p.id));
+      targetList = candidates.map(p => {
+        const pos = context.game.players.findIndex(gp => gp.id === p.id) + 1;
+        return `${pos}号: ${p.name}`;
+      }).join('\n');
+    }
+    return `【指定发言顺序】可选玩家：\n${targetList}\n你是警长，请指定从哪位玩家开始发言。以JSON格式返回: {"type": "assignOrder", "target": 位置编号}`;
+  },
   // 选择目标
   choose_target: (aliveList) => `【选择目标】可选玩家：\n${aliveList}\n请选择目标玩家。以JSON格式返回: {"type": "target", "target": 位置编号}`
 };

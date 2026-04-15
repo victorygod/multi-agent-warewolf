@@ -100,7 +100,11 @@ function formatMessageHistory(messages, players, currentPlayer = null) {
     // 2. 根据消息类型格式化
     switch (msg.type) {
       case 'wolf_speech':
-        // 狼人发言
+        // 狼人发言：如果是狼人玩家，需要添加 [狼人] 子标题
+        if (isWolf && !inWolfSection) {
+          lines.push('[狼人]');
+          inWolfSection = true;
+        }
         lines.push(formatSpeech(msg, players));
         break;
 
@@ -217,13 +221,13 @@ function formatDeath(msg, players) {
       const pos = getPlayerPosition(d.id, players);
       return `${pos}号${d.name}`;
     }).join('、');
-    return `[死亡]${names}`;
+    return `[死亡公告]${names}`;
   }
 
   // 兜底：移除 " 死亡"、" 被猎人射杀" 后缀
   let content = msg.content || '';
   content = content.replace(' 死亡', '').replace(' 被猎人射杀', '');
-  return `[死亡]${content}`;
+  return `[死亡公告]${content}`;
 }
 
 /**
@@ -407,8 +411,8 @@ function formatSheriffCandidates(msg, players) {
   const downMatch = content.match(/警下[：:]\s*(.+)/);
 
   const parts = [];
-  if (upMatch) parts.push(`上:${upMatch[1].trim()}`);
-  if (downMatch) parts.push(`下:${downMatch[1].trim()}`);
+  if (upMatch) parts.push(`警上:${upMatch[1].trim()}`);
+  if (downMatch) parts.push(`警下:${downMatch[1].trim()}`);
 
   return parts.join(' ');
 }
