@@ -1,0 +1,9 @@
+1776280932855 [INFO] server.js:392 [WS] 连接成功
+1776280990196 [INFO] server.js:392 [UI] 行动请求: speak, requestId: 2-speak-1776280990177-dh1gqbas3ya, allowedTargets: undefined
+1776280990280 [INFO] server.js:392 [UI] 行动请求: speak, requestId: 2-speak-1776280990177-dh1gqbas3ya, allowedTargets: undefined
+1776281004170 [INFO] server.js:392 [UI] 行动请求: wolf_vote, requestId: 2-wolf_vote-1776281004168-5ktlrbl9v4b, allowedTargets: [8,9,5,6,3,12,1,2,10,7,11,4]
+1776281004171 [INFO] server.js:392 [Vote] 可选目标: [8,9,5,6,3,12,1,2,10,7,11,4]
+1776281004269 [INFO] server.js:392 [UI] 行动请求: wolf_vote, requestId: 2-wolf_vote-1776281004168-5ktlrbl9v4b, allowedTargets: [8,9,5,6,3,12,1,2,10,7,11,4]
+1776281004271 [INFO] server.js:392 [Vote] 可选目标: [8,9,5,6,3,12,1,2,10,7,11,4]
+1776281020872 [INFO] server.js:392 [UI] 行动请求: campaign, requestId: 2-campaign-1776281020865-bfinnhm9ejt, allowedTargets: undefined
+1776281020961 [INFO] server.js:392 [UI] 行动请求: campaign, requestId: 2-campaign-1776281020865-bfinnhm9ejt, allowedTargets: undefined

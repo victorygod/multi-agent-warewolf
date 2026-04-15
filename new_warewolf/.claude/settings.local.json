@@ -36,7 +36,10 @@
       "Bash(xargs -r kill -9)",
       "Bash(./stop_server.sh:*)",
       "Bash(xargs -r kill echo \"已清理所有client进程\")",
-      "Bash(xargs -r kill -9 sleep 1 node server.js --debug)"
+      "Bash(xargs -r kill -9 sleep 1 node server.js --debug)",
+      "Bash(pkill -f cli_client.js)",
+      "Bash(pkill -f \"node.*client\")",
+      "Bash(pkill -f cli_client)"
     ]
   }
 }

@@ -1,155 +1,275 @@
-# 历史消息压缩方案
+# 历史消息压缩方案（修订版）
 
-## 问题分析
+## 核心思路
 
-从 `docs/backend.log` 可以看到，每次 AI 决策时，历史消息占据了上下文的大半部分。例如第4天时，历史消息包含：
-- 第1天警长竞选的所有发言、投票
-- 第1天白天的发言、投票
-- 第2夜的狼人讨论、投票
-- 第2天的发言、投票
-- ...以此类推
+**压缩逻辑内聚到 LLMAgent 内部**，不改动游戏核心流程（GameEngine、MessageManager、PhaseManager）。
 
-这些历史消息在每次决策时都被完整发送给 LLM，导致：
-1. Token 消耗快速增长
-2. 上下文窗口压力增大
-3. 重要信息被淹没在冗余内容中
+- 每个 LLMAgent 独立维护自己的压缩状态
+- 默认开启压缩，可配置关闭
+- 压缩时机：day_vote 结束后（不含 PK 投票），增量压缩
 
-## 压缩时机
+## 增量压缩逻辑
 
-**触发点**：`day_vote` 阶段结束后（即 `post_vote` 阶段开始前）
+```
+第1天 day_vote 结束：
+  原始消息: [1, 2, 3, ..., 50]（第1天投票前）
+  压缩输入: 消息 1-50
+  压缩输出: compressedSummary_1
+  存储: compressedSummary = compressedSummary_1, compressedAfterMessageId = 50
 
-**原因**：
-- 白天投票是一天的核心事件，投票后局势基本明朗
-- 此时压缩可以为后续夜晚和下一天的决策提供精简上下文
-- 投票结果本身是重要信息，需要包含在压缩内容中
+第2天 day_vote 结束：
+  原始消息: [1, 2, 3, ..., 50, 51, 52, ..., 100]（第2天投票前）
+  压缩输入: compressedSummary_1 + 消息 51-100（上次压缩点之后的所有新消息）
+  压缩输出: compressedSummary_2
+  存储: compressedSummary = compressedSummary_2, compressedAfterMessageId = 100
 
-## 压缩目标
+第3天 day_vote 结束：
+  原始消息: [1, 2, ..., 100, 101, 102, ..., 150]
+  压缩输入: compressedSummary_2 + 消息 101-150
+  压缩输出: compressedSummary_3
+  存储: compressedSummary = compressedSummary_3, compressedAfterMessageId = 150
+  ...
+```
 
-将历史消息压缩为 **200字以内** 的局势摘要，包含：
-1. **存活状态**：当前存活玩家及其位置
-2. **死亡记录**：已死亡玩家及死亡原因（被刀、被毒、被投）
-3. **身份信息**：已暴露的身份（女巫跳身份、预言家留遗言等）
-4. **投票分析**：关键投票结果及其暗示
-5. **局势判断**：好人/狼人优势、可疑玩家等
+**关键点**：
+- 每次压缩的输入 = 上一次的压缩摘要 + 新增消息（从 `compressedAfterMessageId + 1` 到当前投票前）
+- 输出是新的压缩摘要，**不是追加**，而是**重新压缩**
+- `compressedAfterMessageId` 始终指向最新压缩点
 
-## 技术方案
+## 系统架构
 
-### 1. 新增压缩模块
+```
+决策流程:
+AIController.decide()
+  → LLMAgent.decide()
+    → buildMessages()
+      → formatMessageHistory(context.messages, ...)
+        → [检测到已压缩，用 compressedSummary + 新消息]
 
-**文件**：`ai/compressor.js`
+压缩触发:
+day_vote 阶段结束 → 遍历所有 LLMAgent → 异步执行增量压缩
+```
+
+## 实现方案
+
+### 1. LLMAgent 扩展
+
+**修改文件**：`ai/agents/llm.js`
 
 ```javascript
-/**
- * 历史消息压缩器
- * 职责：将完整历史消息压缩为精简摘要
- */
+const { buildSystemPrompt, getPhasePrompt, ROLE_NAMES } = require('../prompts');
+const { formatMessageHistory } = require('../context');
+const { createLogger } = require('../../utils/logger');
 
-class HistoryCompressor {
-  constructor(game) {
+// 创建日志实例（延迟初始化，只使用backend.log）
+let backendLogger = null;
+function getLogger() {
+  if (!backendLogger) {
+    backendLogger = global.backendLogger || createLogger('backend.log');
+  }
+  return backendLogger;
+}
+
+class LLMAgent {
+  constructor(playerId, game, options = {}) {
+    this.playerId = playerId;
     this.game = game;
+    this.systemPrompt = '';
+    this.lastMessages = null;
+
+    // 压缩配置
+    this.compressionEnabled = options.compressionEnabled !== false; // 默认开启
+    this.compressedSummary = null;      // 当前压缩摘要
+    this.compressedAfterMessageId = 0; // 压缩点之后的消息ID
   }
 
   /**
-   * 压缩历史消息
-   * @param {Array} messages - 待压缩的消息列表
-   * @param {Object} player - 当前玩家（用于过滤可见性）
-   * @returns {Promise<string>} 压缩后的摘要（200字以内）
+   * 增量压缩历史消息
+   * 在 day_vote 结束后调用，压缩从上次压缩点到当前投票前的消息
+   * @param {Array} messages - 完整消息列表
    */
-  async compress(messages, player) {
-    // 1. 过滤玩家可见消息
-    const visibleMessages = this.filterVisible(messages, player);
+  async compressHistory(messages) {
+    if (!this.compressionEnabled) return;
+    if (!this.isApiAvailable()) return;
 
-    // 2. 构建压缩提示词
-    const prompt = this.buildCompressPrompt(visibleMessages, player);
+    // 找出需要压缩的新消息（从上次压缩点到当前投票前）
+    const newMessages = messages.filter(m =>
+      m.id > this.compressedAfterMessageId &&
+      m.type !== 'vote_result' // 排除投票结果，投票结果后面单独处理
+    );
 
-    // 3. 调用 LLM 压缩
-    const summary = await this.callLLM(prompt);
+    // 如果没有新消息需要压缩，直接返回
+    if (newMessages.length === 0) return;
 
-    return summary;
+    // 构建压缩提示词：上次摘要 + 新增消息
+    const prompt = this.buildCompressPrompt(newMessages);
+
+    // 调用 LLM 压缩
+    const summary = await this.callCompressAPI(prompt);
+
+    if (summary) {
+      // 更新压缩摘要（是重新压缩，不是追加）
+      this.compressedSummary = summary;
+      // 更新压缩点：当前所有消息的最后一条ID
+      this.compressedAfterMessageId = messages[messages.length - 1]?.id || 0;
+    }
   }
 
   /**
    * 构建压缩提示词
+   * @param {Array} newMessages - 新增的消息（上次压缩点之后到当前）
    */
-  buildCompressPrompt(messages, player) {
-    // 提取关键信息
-    const deaths = this.extractDeaths(messages);
-    const votes = this.extractKeyVotes(messages);
-    const identities = this.extractIdentities(messages);
+  buildCompressPrompt(newMessages) {
+    // 获取角色信息（参考 buildSystemPrompt）
+    const player = this.game.players.find(p => p.id === this.playerId);
+    const roleId = player?.role?.id || player?.role;
+    const roleName = ROLE_NAMES[roleId] || roleId;
+    const position = this.game.getPosition(this.playerId);
 
-    return `你是狼人杀游戏分析师。请将以下游戏历史压缩为200字以内的摘要。
+    // 狼人队友信息
+    let wolfTeammates = '';
+    if (roleId === 'werewolf') {
+      const teammates = this.game.players.filter(p =>
+        p.alive && p.id !== this.playerId && p.role?.id === 'werewolf'
+      );
+      if (teammates.length > 0) {
+        const positions = teammates.map(p => this.game.getPosition(p.id) + '号').join('、');
+        wolfTeammates = `\n你的队友: ${positions}`;
+      }
+    }
+
+    // 格式化新增消息
+    const newMessagesText = formatMessageHistory(newMessages, this.game.players, player);
+
+    // 系统提示词去掉 soul 的部分
+    const identityInfo = `名字:${player?.name || '未知'} 位置:${position}号位 角色:${roleName}${wolfTeammates}`;
+
+    return `你是狼人杀游戏分析师。请将以下游戏历史压缩为300字以内的局势摘要。
 
 ## 你的身份
-位置: ${this.getPlayerPosition(player)}号
-角色: ${player.role?.name || player.role}
+${identityInfo}
+规则:女巫仅首夜可自救|守卫不可连守|猎人被毒不能开枪|首夜/白天死亡有遗言|情侣一方死另一方殉情
 
-## 关键事件
-### 死亡记录
-${deaths}
+## 上次压缩摘要
+${this.compressedSummary || '（无）'}
 
-### 关键投票
-${votes}
-
-### 暴露身份
-${identities}
-
-## 原始历史
-${this.formatMessages(messages)}
+## 新增消息（从上次压缩点到当前）
+${newMessagesText}
 
 ## 要求
-1. 保留关键信息：死亡、身份暴露、关键投票
-2. 省略冗余发言（"我是好人"等无信息量内容）
-3. 突出对局势判断有价值的信息
-4. 控制在200字以内
-5. 使用简洁的符号：X号=位置，狼/民/神=角色，刀/毒/投=死因`;
+1. 结合上次摘要和新增消息，生成新的精简摘要
+2. 保留关键信息：死亡、身份暴露、关键投票
+3. 省略冗余发言
+4. 突出对局势判断有价值的信息
+5. 控制在300字以内
+6. 记录对每个角色的分析印象`;
+  }
+
+  /**
+   * 调用压缩专用 API（复用现有 API）
+   */
+  async callCompressAPI(prompt) {
+    const baseUrl = process.env.BASE_URL;
+    const apiKey = process.env.AUTH_TOKEN;
+    const model = process.env.MODEL;
+
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [
+          { role: 'system', content: '你是一个简洁的狼人杀游戏分析师，擅长压缩信息' },
+          { role: 'user', content: prompt }
+        ]
+      })
+    });
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || null;
+  }
+
+  /**
+   * 构建消息（支持压缩）
+   */
+  buildMessages(context) {
+    // 检查是否需要使用压缩
+    const useCompression = this.compressionEnabled &&
+                           this.compressedSummary &&
+                           context.messages?.length > 0;
+
+    let historyText;
+    if (useCompression) {
+      // 分离：已压缩的消息（用摘要）+ 新消息（完整格式）
+      const newMsgs = context.messages.filter(m => m.id > this.compressedAfterMessageId);
+
+      historyText = this.formatWithCompression(newMsgs);
+    } else {
+      historyText = formatMessageHistory(context.messages, this.game.players);
+    }
+
+    const phasePrompt = getPhasePrompt(context.phase, context);
+    const userContent = `${historyText}\n\n${phasePrompt}`;
+
+    this.lastMessages = [
+      { role: 'system', content: this.systemPrompt },
+      { role: 'user', content: userContent }
+    ];
+  }
+
+  /**
+   * 使用压缩历史构建消息
+   */
+  formatWithCompression(newMsgs) {
+    const lines = ['【历史摘要】', this.compressedSummary];
+
+    if (newMsgs.length > 0) {
+      lines.push('', '【最新动态】');
+      lines.push(formatMessageHistory(newMsgs, this.game.players));
+    }
+
+    return lines.join('\n');
   }
 }
 ```
 
-### 2. 消息管理器扩展
+### 2. AIController 扩展
 
-**修改文件**：`engine/message.js`
+**修改文件**：`ai/controller.js`
 
 ```javascript
-class MessageManager extends EventEmitter {
-  constructor() {
-    super();
-    this.messages = [];
-    this._nextId = 1;
-    this.compressedHistory = null;  // 压缩后的历史摘要
-    this.compressedAfterId = 0;      // 压缩点之后的消息ID
+class AIController extends PlayerController {
+  constructor(playerId, game, options = {}) {
+    super(playerId, game);
+
+    // 创建 Agent（传递压缩配置）
+    this.randomAgent = new RandomAgent(playerId, game);
+    this.llmAgent = options.agentType === 'llm'
+      ? new LLMAgent(playerId, game, { compressionEnabled: options.compressionEnabled })
+      : null;
+    this.mockAgent = options.agentType === 'mock'
+      ? new MockAgent(playerId, game, options.mockOptions)
+      : null;
   }
 
-  /**
-   * 获取对某玩家可见的消息（支持压缩）
-   */
-  getVisibleTo(player, game, useCompression = true) {
-    const allVisible = this.messages.filter(msg => this.canSee(player, msg, game));
-
-    if (!useCompression || !this.compressedHistory) {
-      return allVisible;
-    }
-
-    // 返回：压缩摘要 + 压缩点之后的新消息
-    const newMessages = allVisible.filter(msg => msg.id > this.compressedAfterId);
-
-    // 如果压缩摘要存在，作为特殊消息返回
-    if (this.compressedHistory) {
-      return [
-        { type: 'compressed_history', content: this.compressedHistory },
-        ...newMessages
-      ];
-    }
-
-    return allVisible;
-  }
+  // ...
 
   /**
-   * 设置压缩历史
+   * 触发所有 LLM Agent 压缩历史
+   * 在 day_vote 结束后调用
    */
-  setCompressedHistory(summary, afterId) {
-    this.compressedHistory = summary;
-    this.compressedAfterId = afterId;
+  compressAllHistory(messages) {
+    if (!this.llmAgent) return;
+
+    // 异步执行，不阻塞
+    this.llmAgent.compressHistory(messages).catch(err => {
+      getLogger().error(`压缩历史失败: ${err.message}`);
+    });
   }
 }
 ```
@@ -158,18 +278,23 @@ class MessageManager extends EventEmitter {
 
 **修改文件**：`engine/phase.js`
 
-在 `day_vote` 阶段后添加压缩逻辑：
-
 ```javascript
-// day_vote 阶段
+// 白天投票
 {
   id: 'day_vote',
   name: '白天投票',
   execute: async (game) => {
-    // ... 现有投票逻辑 ...
+    const voters = game.players.filter(p => p.alive);
 
-    // 投票结束后，异步压缩历史（不阻塞游戏流程）
-    game.compressHistoryAsync();
+    const getAllowedTargets = (playerId) => game.players
+      .filter(p => p.alive && p.id !== playerId && !(p.role.id === 'idiot' && p.state?.revealed))
+      .map(p => p.id);
+
+    // 并行让所有存活玩家投票
+    await Promise.all(voters.map(voter => game.callVote(voter.id, 'vote', { allowedTargets: getAllowedTargets(voter.id) })));
+
+    // 投票结束后（不含 PK），触发所有 AI 压缩历史
+    game.triggerHistoryCompression();
   }
 }
 ```
@@ -183,171 +308,137 @@ class GameEngine {
   // ...
 
   /**
-   * 异步压缩历史（不阻塞游戏流程）
+   * 触发历史消息压缩
+   * 在 day_vote 结束后调用
    */
-  compressHistoryAsync() {
-    // 只在有 LLM 配置时执行
-    if (!process.env.BASE_URL || !process.env.AUTH_TOKEN) {
-      return;
+  triggerHistoryCompression() {
+    const messages = this.message.messages;
+
+    // 遍历所有 AI 控制器，触发压缩
+    for (const controller of this.aiManager.controllers.values()) {
+      if (controller.llmAgent) {
+        controller.llmAgent.compressHistory(messages);
+      }
     }
-
-    // 异步执行，不等待结果
-    this._compressPromise = this._compressHistory();
   }
-
-  async _compressHistory() {
-    const compressor = new HistoryCompressor(this);
-
-    // 为每个玩家生成压缩摘要（因为可见性不同）
-    const summaries = new Map();
-
-    for (const player of this.players.filter(p => p.alive)) {
-      const visibleMessages = this.message.getVisibleTo(player, this, false);
-      const summary = await compressor.compress(visibleMessages, player);
-      summaries.set(player.id, summary);
-    }
-
-    // 存储压缩结果
-    this.message.compressedSummaries = summaries;
-    this.message.compressedAfterId = this.message.messages.length;
-  }
-}
-```
-
-### 5. 上下文构建调整
-
-**修改文件**：`ai/context.js`
-
-```javascript
-function formatMessageHistory(messages, players, compressedHistory = null) {
-  if (compressedHistory) {
-    // 使用压缩历史
-    const lines = ['[历史摘要]', compressedHistory];
-
-    // 只格式化压缩点之后的新消息
-    const newMessages = messages.filter(m => m.type !== 'compressed_history');
-    if (newMessages.length > 0) {
-      lines.push('', '[最新动态]');
-      lines.push(formatMessages(newMessages, players));
-    }
-
-    return lines.join('\n');
-  }
-
-  // 原有逻辑：完整格式化
-  return formatMessages(messages, players);
 }
 ```
 
 ## 数据流
 
 ```
-day_vote 结束
+day_vote 结束（不含 PK）
     ↓
-触发异步压缩（不阻塞）
+game.triggerHistoryCompression()
     ↓
-为每个存活玩家生成摘要
+遍历所有 AIController
     ↓
-存储到 message.compressedSummaries
+每个 LLMAgent.compressHistory(messages)
+    ↓
+找出新增消息: messages.filter(id > compressedAfterMessageId)
+    ↓
+构建提示词: [上次摘要] + [新增消息]
+    ↓
+调用 LLM 压缩（异步）
+    ↓
+更新: compressedSummary = 新摘要, compressedAfterMessageId = 最新消息ID
     ↓
 后续决策时：
     ↓
-获取压缩摘要 + 新消息
+LLMAgent.buildMessages()
     ↓
-构建精简上下文
+检测到已压缩 → formatWithCompression()
+    ↓
+返回: [compressedSummary] + [id > compressedAfterMessageId 的新消息]
 ```
 
 ## 压缩提示词示例
 
 ```
-你是狼人杀游戏分析师。请将以下游戏历史压缩为200字以内的摘要。
+你是狼人杀游戏分析师。请将以下游戏历史压缩为200字以内的局势摘要。
 
 ## 你的身份
 位置: 7号
 角色: 村民
 
-## 关键事件
-### 死亡记录
-第1夜: 5号预言家(被刀)
-第2夜: 3号狼人、4号狼人(女巫毒杀)
-第3天: 2号村民(被投)
+## 上次压缩摘要
+【局势】D2，存活6人(3民2狼1神)。死亡:5预言(刀)、3狼(毒)。
+【身份】4号狼(未跳)。
+【投票】D1警长1号当选。
 
-### 关键投票
-第1天警长: 7号小芳(2票) vs 1号aa(6票)，1号当选
-第3天放逐: 2号阿华(3票)出局
-
-### 暴露身份
-6号Claude: 自称女巫，毒杀4号
-5号阿伟: 预言家遗言，查验7号=好人
-
-## 原始历史
-[第1天警长竞选发言...]
-[第1天投票结果...]
+## 新增消息（从上次压缩点到当前）
+第2天
+[发言]
+1号张三:我觉得4号很可疑...
+2号李四:我预言家，查验6号好人...
 ...
 
+[投票]票型：4号(1,2,3) 6号(5,7,8) 平票 PK
+4号在 PK 中被投出局
+
 ## 要求
-1. 保留关键信息
-2. 省略无信息量发言
-3. 突出对局势判断有价值的信息
+1. 结合上次摘要和新增消息，生成新的精简摘要
+2. 保留关键信息
+3. 省略冗余发言
 4. 控制在200字以内
 ```
 
 ## 预期输出示例
 
 ```
+【历史摘要】
 【局势】D3，存活4人(1民1狼2神)。死亡:5预言(刀)、3狼(毒)、4狼(毒)、2民(投)。
 【身份】6号女巫(已跳，毒杀4号)，9号狼(未跳)。
-【投票】D1警长1号当选；D3投出2号村民。
+【投票】D1警长1号当选；D3投出2号村民(平票 PK 出局)。
 【分析】狼人剩9号，好人优势。9号发言"我是好人"无信息，6号女巫可信。
-【建议】重点怀疑9号，观察1号、7号、8号站边。
+
+【最新动态】
+第3天
+[发言]
+7号小芳:我觉得9号...
+...
 ```
 
 ## 实现步骤
 
-1. **创建 `ai/compressor.js`**
-   - 实现 `HistoryCompressor` 类
-   - 实现关键信息提取函数
-   - 实现 LLM 调用和结果解析
+1. **修改 `ai/agents/llm.js`**
+   - 构造函数增加 `options` 参数，支持 `compressionEnabled`
+   - 添加 `compressHistory()` 方法（增量压缩）
+   - 添加 `buildCompressPrompt()` 方法
+   - 修改 `buildMessages()` 支持压缩
+   - 添加 `formatWithCompression()` 方法
 
-2. **修改 `engine/message.js`**
-   - 添加 `compressedSummaries` 属性
-   - 添加 `compressedAfterId` 属性
-   - 修改 `getVisibleTo` 支持压缩历史
+2. **修改 `ai/controller.js`**
+   - 构造函数传递压缩配置到 LLMAgent
+   - 添加 `compressAllHistory()` 方法
 
-3. **修改 `engine/phase.js`**
-   - 在 `day_vote` 结束后触发异步压缩
+3. **修改 `engine/main.js`**
+   - 添加 `triggerHistoryCompression()` 方法
 
-4. **修改 `engine/main.js`**
-   - 添加 `compressHistoryAsync` 方法
-   - 管理压缩生命周期
+4. **修改 `engine/phase.js`**
+   - 在 `day_vote` 阶段结束后调用 `game.triggerHistoryCompression()`
 
-5. **修改 `ai/context.js`**
-   - `formatMessageHistory` 支持压缩历史
-   - `buildFullContext` 传递压缩摘要
-
-6. **测试验证**
+5. **测试验证**
    - 单元测试：压缩逻辑
    - 集成测试：完整游戏流程
    - 性能测试：Token 消耗对比
 
 ## 注意事项
 
-1. **可见性差异**：不同玩家看到的历史不同（狼人知道队友，好人不知道），需要为每个玩家单独压缩
+1. **异步不阻塞**：压缩在后台执行，不影响游戏流程
 
-2. **异步不阻塞**：压缩在后台执行，不影响游戏流畅度
+2. **降级策略**：如果 LLM 不可用或压缩失败，`compressHistory()` 会 catch 异常并忽略，不影响游戏
 
-3. **降级策略**：如果 LLM 不可用或压缩失败，回退到完整历史
+3. **只压缩一次**：`compressedSummary` 存在则跳过？不对，每次 day_vote 结束都应该增量压缩更新
 
-4. **压缩时机**：只在天数推进时压缩，避免频繁调用 LLM
+4. **可见性差异**：当前方案是统一压缩所有消息，每个 AI 看到的是一样的压缩结果。实际上不同阵营看到的历史不同（狼人知道队友），可选优化是为不同阵营分别压缩
 
-5. **压缩粒度**：可配置压缩频率（每天压缩 vs 隔天压缩）
+5. **PK 投票处理**：当前方案在 day_vote 结束后就压缩，不包含 PK 投票。如果有 PK，PK 投票会在下一次压缩时包含进去
 
 ## 后续优化
 
-1. **增量压缩**：只压缩新增内容，复用之前的压缩结果
+1. **按阵营压缩**：狼人和好人分别压缩（因为看到的历史不同）
 
-2. **缓存机制**：相同历史不重复压缩
+2. **压缩质量评估**：监控压缩后的信息完整性
 
-3. **压缩质量评估**：监控压缩后的信息完整性
-
-4. **玩家个性化**：根据玩家角色调整压缩重点（狼人关注队友，好人关注投票）
+3. **自适应压缩**：根据游戏阶段动态调整压缩频率

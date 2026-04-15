@@ -93,7 +93,7 @@ const PHASE_PROMPTS = {
     const killedPos = killedPlayer ? context.game.players.findIndex(p => p.id === targetId) + 1 : '';
     const healAvailable = context.witchPotion?.heal ? '可用' : '已用完';
     const poisonAvailable = context.witchPotion?.poison ? '可用' : '已用完';
-    return `【女巫】可选玩家：\n${aliveList}\n今晚 ${killedPos}号${killedName} 被狼人杀害。解药：${healAvailable}，毒药：${poisonAvailable}。以JSON格式返回: {"type": "witch", "action": "heal/poison/skip", "target": 编号(毒杀时需要)}`;
+    return `【女巫】可选玩家：\n${aliveList}\n今晚 ${killedPos}号${killedName} 被狼人杀害。解药：${healAvailable}，毒药：${poisonAvailable}。以JSON格式返回: {"type": "heal"} 或 {"type": "poison", "target": 编号} 或 {"type": "skip"}`;
   },
   // 警长竞选相关
   campaign: () => '【警长竞选】是否参与警长竞选？以JSON格式返回: {"type": "campaign", "run": true/false}',

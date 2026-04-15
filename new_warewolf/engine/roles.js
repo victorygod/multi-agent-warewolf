@@ -224,7 +224,7 @@ const ROLES = {
           player.alive = true; // 免疫死亡
           game.message.add({
             type: 'action',
-            content: `白痴 ${getPlayerDisplay(game.players, player)} 翻牌免疫放逐`,
+            content: `白痴 ${getPlayerDisplay(game.players, player)} 翻牌免疫放逐，已失去投票权`,
             playerId: player.id,
             visibility: 'public'
           });
