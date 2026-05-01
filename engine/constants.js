@@ -164,7 +164,7 @@ const MSG_TEMPLATE = {
   SHERIFF_BADGE_LOST: '[系统]警徽流失',
   SHERIFF_DEAD: '[系统]警长死亡，警徽流失',
   NO_SHERIFF_CANDIDATE: '[系统]无人竞选警长',
-  WOLF_VOTE_RESULT: '[系统|私密]狼刀票型：{票型}',
+  WOLF_VOTE_RESULT: '[系统|私密]狼刀票型：{票型}\n最终击杀：{最终击杀}',
   WOLF_VOTE_EMPTY: '[系统|私密]狼人空刀'
 };
 

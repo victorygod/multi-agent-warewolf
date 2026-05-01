@@ -27,13 +27,22 @@ describe('prompt - getRandomProfiles', () => {
     if (profiles.length !== 3) throw new Error('应返回3个配置');
   });
 
-  it('每个配置有name/thinking/background/speaking', () => {
+  it('每个配置有name/thinking/background/speaking及元数据', () => {
     const profiles = getRandomProfiles(2);
     for (const p of profiles) {
       if (!p.name) throw new Error('配置应有name');
       if (typeof p.background !== 'string') throw new Error('配置应有background字符串');
       if (typeof p.thinking !== 'string') throw new Error('配置应有thinking字符串');
       if (typeof p.speaking !== 'string') throw new Error('配置应有speaking字符串');
+    }
+    const fileProfiles = profiles.filter(p => p.englishName);
+    if (fileProfiles.length > 0) {
+      for (const p of fileProfiles) {
+        if (!p.englishName) throw new Error('文件配置应有englishName');
+        if (!p.faction) throw new Error('文件配置应有faction');
+        if (!p.path) throw new Error('文件配置应有path');
+        if (!p.element) throw new Error('文件配置应有element');
+      }
     }
   });
 

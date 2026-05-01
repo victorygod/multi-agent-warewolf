@@ -136,7 +136,8 @@ const PHASE_FLOW = [
       game.message.add({
         type: MSG.WOLF_VOTE_RESULT,
         content: buildMessage('WOLF_VOTE_RESULT', {
-          票型: formatVoteDetails(voteDetails)
+          票型: formatVoteDetails(voteDetails),
+          最终击杀: targetPlayer ? `${targetPlayer.id}号${targetPlayer.name}` : '无'
         }),
         visibility: VISIBILITY.CAMP,
         playerId: wolves[0]?.id,

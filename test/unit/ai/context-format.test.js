@@ -146,7 +146,7 @@ describe('PhaseManager 驱动上下文', () => {
     const content = lastUserMsg.content;
     if (!content.includes('【狼人投票】')) throw new Error('应包含投票提示词');
     if (!content.includes('可选玩家')) throw new Error('应包含可选玩家提示');
-    if (!content.includes('请选择今晚要击杀的玩家')) throw new Error('应包含选择提示');
+    if (!content.includes('选择今晚要击杀的玩家')) throw new Error('应包含选择提示');
     if (!/\d+号:/.test(content)) throw new Error('应包含玩家列表');
   });
 

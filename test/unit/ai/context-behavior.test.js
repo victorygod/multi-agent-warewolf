@@ -144,13 +144,13 @@ describe('Phase Prompt 精确匹配', () => {
     includes(wolfVote, '【狼人投票】');
     includes(wolfVote, '1号: P1');
     includes(wolfVote, '9号: P9');
-    includes(wolfVote, '请选择今晚要击杀的玩家');
+    includes(wolfVote, '选择今晚要击杀的玩家');
     const seer = getCurrentTask('action_seer', ctx);
     includes(seer, '【预言家】');
-    includes(seer, '请选择要查验的玩家');
+    includes(seer, '选择要查验的玩家');
     const dayVote = getCurrentTask('action_day_vote', ctx);
     includes(dayVote, '【白天投票】');
-    includes(dayVote, '请选择要放逐的玩家');
+    includes(dayVote, '选择要放逐的玩家');
   });
 
   it('allowedTargets过滤phase prompt', () => {
@@ -236,7 +236,7 @@ describe('多Agent上下文差异', () => {
     const lastUser = getLastUserMsg(msgs);
     includes(lastUser, '【狼人投票】');
     includes(lastUser, '可选玩家');
-    includes(lastUser, '请选择今晚要击杀的玩家');
+    includes(lastUser, '选择今晚要击杀的玩家');
     includes(lastUser, 'thinking1');
   });
 
@@ -255,7 +255,7 @@ describe('多Agent上下文差异', () => {
     if (!msgs) throw new Error('预言家应有查验上下文');
     const lastUser = getLastUserMsg(msgs);
     includes(lastUser, '【预言家】');
-    includes(lastUser, '请选择要查验的玩家');
+    includes(lastUser, '选择要查验的玩家');
     includes(lastUser, 'thinking4');
   });
 
@@ -374,11 +374,11 @@ describe('多Agent全流程', () => {
     const cupidCalls = getMock(aiControllers, 9).getCallsByPhase('cupid');
     if (cupidCalls.length === 0) throw new Error('丘比特应有连线调用');
     includes(getLastUserMsg(cupidCalls[cupidCalls.length - 1].messagesForLLM), '【丘比特】');
-    includes(getLastUserMsg(cupidCalls[cupidCalls.length - 1].messagesForLLM), '请选择两名玩家连接为情侣');
+    includes(getLastUserMsg(cupidCalls[cupidCalls.length - 1].messagesForLLM), '选择两名玩家连接为情侣');
     const guardCalls = getMock(aiControllers, 7).getCallsByPhase('guard');
     if (guardCalls.length === 0) throw new Error('守卫应有守护调用');
     includes(getLastUserMsg(guardCalls[guardCalls.length - 1].messagesForLLM), '【守卫】');
-    includes(getLastUserMsg(guardCalls[guardCalls.length - 1].messagesForLLM), '请选择要守护的玩家');
+    includes(getLastUserMsg(guardCalls[guardCalls.length - 1].messagesForLLM), '选择要守护的玩家');
   });
 });
 
