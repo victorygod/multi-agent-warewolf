@@ -258,12 +258,9 @@ class Controller {
     return { success: true };
   }
 
-  // 获取玩家位置（1-based）- 使用玩家在数组中的位置
+  // 获取玩家位置（ID = 位置编号）
   getPlayerPosition(playerId) {
-    const state = this.cachedState;
-    if (!state?.players) return playerId;
-    const index = state.players.findIndex(p => p.id === playerId);
-    return index >= 0 ? index + 1 : playerId;
+    return playerId;
   }
 
   // 获取当前玩家

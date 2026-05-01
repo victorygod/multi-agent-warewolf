@@ -8,17 +8,17 @@ const { EventEmitter } = require('./event');
 const { MessageManager } = require('./message');
 const { PhaseManager } = require('./phase');
 const { VoteManager } = require('./vote');
-const { NightManager } = require('./night');
 const { HOOKS, BOARD_PRESETS, getEffectiveRules } = require('./config');
 const { createPlayerRole } = require('./roles');
 const { HumanController } = require('./player');
 const {
   shuffle,
   getSpeakerOrder,
-  getPosition,
   getPlayerDisplay
 } = require('./utils');
 const { createLogger } = require('../utils/logger');
+const { PHASE, ACTION, MSG, VISIBILITY, CAMP, DEATH_REASON } = require('./constants');
+const { buildMessage } = require('./message_template');
 
 // 创建日志实例（延迟初始化）
 let backendLogger = null;
@@ -43,8 +43,7 @@ class GameEngine extends EventEmitter {
 
     // 游戏状态
     this.players = [];
-    this.nightCount = 0;
-    this.dayCount = 0;
+    this.round = 1;
     this.winner = null;
 
     // 夜晚状态
@@ -71,7 +70,6 @@ class GameEngine extends EventEmitter {
 
     // 子管理器
     this.voteManager = new VoteManager(this);
-    this.nightManager = new NightManager(this);
 
     // WebSocket 等待机制
     this._pendingRequests = new Map(); // requestId -> { resolve, timeout }
@@ -101,12 +99,12 @@ class GameEngine extends EventEmitter {
 
     // 基础验证
     if (!player?.alive) return { success: false, message: '玩家已死亡' };
-    if (this.config.hooks.getCamp(player, this) !== 'wolf') {
+    if (this.config.hooks.getCamp(player, this) !== CAMP.WOLF) {
       return { success: false, message: '只有狼人可以自爆' };
     }
 
     // 获取自爆技能定义
-    const skill = player.role?.skills?.explode;
+    const skill = player.role?.skills?.[ACTION.EXPLODE];
     if (!skill) return { success: false, message: '技能不存在' };
 
     const currentPhase = this.phaseManager?.getCurrentPhase()?.id;
@@ -167,69 +165,70 @@ class GameEngine extends EventEmitter {
 
     // 根据行动类型构建数据
     switch (actionType) {
-      case 'guard': {
+      case ACTION.GUARD: {
         const lastTarget = player.state?.lastGuardTarget;
-        const filter = filters?.guard;
+        const filter = filters?.[ACTION.GUARD];
         const allowedTargets = filter ? filter(this, player) : null;
         return { ...baseData, lastGuardTarget: lastTarget, allowedTargets };
       }
 
-      case 'witch': {
+      case ACTION.WITCH: {
         const werewolfTarget = extraData?.werewolfTarget || this.werewolfTarget;
-        const filter = filters?.witch_poison;
+        const filter = filters?.[ACTION.WITCH_POISON];
         const poisonTargets = filter ? filter(this, player, { werewolfTarget }) : null;
         return {
           ...baseData,
           werewolfTarget,
           healAvailable: extraData?.healAvailable ?? (player.state?.heal > 0),
           poisonAvailable: extraData?.poisonAvailable ?? (player.state?.poison > 0),
-          canSelfHeal: extraData?.canSelfHeal ?? (this.nightCount === 0),
+          canSelfHeal: extraData?.canSelfHeal ?? (this.round === 1),
           poisonTargets
         };
       }
 
-      case 'seer': {
+      case ACTION.SEER: {
         const checkedIds = (player.state?.seerChecks || []).map(c => c.targetId);
-        const filter = filters?.seer;
+        const filter = filters?.[ACTION.SEER];
         const allowedTargets = filter ? filter(this, player) : null;
         return { ...baseData, checkedIds, allowedTargets: allowedTargets?.length > 0 ? allowedTargets : null };
       }
 
-      case 'cupid': {
+      case ACTION.CUPID: {
         const allowedTargets = this.players.filter(p => p.alive).map(p => p.id);
         return { ...baseData, count: 2, allowedTargets };
       }
 
-      case 'vote':
-      case 'sheriff_vote': {
+      case ACTION.POST_VOTE:
+      case ACTION.DAY_VOTE:
+      case ACTION.SHERIFF_VOTE: {
         // 优先使用 extraData 中传入的 allowedTargets（如警长投票时的候选人）
         if (extraData?.allowedTargets) {
           return { ...baseData, allowedTargets: extraData.allowedTargets };
         }
-        const filter = filters?.vote;
+        const filter = filters?.[ACTION.POST_VOTE];
         const allowedTargets = filter ? filter(this, player) : null;
         return { ...baseData, allowedTargets };
       }
 
-      case 'wolf_vote': {
-        const filter = filters?.wolf_vote;
+      case ACTION.NIGHT_WEREWOLF_VOTE: {
+        const filter = filters?.[ACTION.NIGHT_WEREWOLF_VOTE];
         const allowedTargets = filter ? filter(this, player) : null;
         return { ...baseData, allowedTargets };
       }
 
-      case 'shoot': {
-        const filter = filters?.shoot;
+      case ACTION.SHOOT: {
+        const filter = filters?.[ACTION.SHOOT];
         const allowedTargets = filter ? filter(this, player) : null;
         return { ...baseData, allowedTargets };
       }
 
-      case 'passBadge': {
-        const filter = filters?.passBadge;
+      case ACTION.PASS_BADGE: {
+        const filter = filters?.[ACTION.PASS_BADGE];
         const allowedTargets = filter ? filter(this, player) : null;
         return { ...baseData, allowedTargets };
       }
 
-      case 'assignOrder': {
+      case ACTION.ASSIGN_ORDER: {
         // 警长指定发言顺序：可选所有存活玩家（除自己）
         const aliveOthers = this.players
           .filter(p => p.alive && p.id !== player.id)
@@ -237,11 +236,10 @@ class GameEngine extends EventEmitter {
         return { ...baseData, allowedTargets: aliveOthers };
       }
 
-      case 'campaign':
-      case 'withdraw':
-      case 'speak':
-      case 'last_words':
-      case 'explode':
+      case ACTION.SHERIFF_CAMPAIGN:
+      case ACTION.WITHDRAW:
+      case ACTION.LAST_WORDS:
+      case ACTION.EXPLODE:
         return baseData;
 
       default:
@@ -271,7 +269,7 @@ class GameEngine extends EventEmitter {
   }
 
   // 让玩家发言 - 支持单个 playerId 或数组
-  async callSpeech(playerId, actionType = 'speak', visibility = 'public') {
+  async callSpeech(playerId, actionType, visibility = VISIBILITY.PUBLIC) {
     // 支持数组输入
     if (Array.isArray(playerId)) {
       // 初始化发言队列
@@ -296,8 +294,13 @@ class GameEngine extends EventEmitter {
 
     // 使用 controller 获取发言内容
     if (controller && typeof controller.getSpeechResult === 'function') {
-      const result = await controller.getSpeechResult(visibility, actionType);
-      this.speak(playerId, result.content, visibility, actionType);
+      try {
+        const result = await controller.getSpeechResult(visibility, actionType);
+        this.speak(playerId, result.content, visibility, actionType);
+      } catch (err) {
+        getLogger().warn(`${player.name} 发言超时或出错，跳过发言: ${err.message}`);
+        this.speak(playerId, '', visibility, actionType);
+      }
     }
 
     // 从队列中移除已发言的玩家
@@ -308,7 +311,7 @@ class GameEngine extends EventEmitter {
   }
 
   // 让玩家投票 - 支持单个 playerId 或数组
-  async callVote(playerId, actionType = 'vote', extraData = {}) {
+  async callVote(playerId, actionType, extraData = {}) {
     // 支持数组输入
     if (Array.isArray(playerId)) {
       await Promise.all(playerId.map(id => this.callVote(id, actionType, extraData)));
@@ -323,9 +326,16 @@ class GameEngine extends EventEmitter {
 
     // 使用 controller 获取投票结果（传递 actionType 以区分狼人投票和白天的投票）
     if (controller && typeof controller.getVoteResult === 'function') {
-      // 循环直到玩家做出有效选择
+      // 循环直到玩家做出有效选择或超时
       while (true) {
-        const result = await controller.getVoteResult(actionType, extraData);
+        let result;
+        try {
+          result = await controller.getVoteResult(actionType, extraData);
+        } catch (err) {
+          getLogger().warn(`${player.name} 投票超时或出错，视为弃权: ${err.message}`);
+          return;
+        }
+
         const targetId = result?.targetId;
 
         // 跳过无效投票（如没有可选目标时返回null）
@@ -359,7 +369,7 @@ class GameEngine extends EventEmitter {
     if (!player) return;
 
     // 允许死亡玩家使用特定技能（passBadge: 警长传警徽, shoot: 猎人开枪）
-    const deadPlayerAllowedSkills = ['passBadge', 'shoot'];
+    const deadPlayerAllowedSkills = [ACTION.PASS_BADGE, ACTION.SHOOT];
     if (!player.alive && !deadPlayerAllowedSkills.includes(actionType)) return;
 
     // 使用 buildActionData 计算 allowedTargets，传递给 controller
@@ -381,7 +391,12 @@ class GameEngine extends EventEmitter {
     // 使用统一的 PlayerController
     const controller = this.getPlayerController(playerId);
     if (controller && typeof controller.useSkill === 'function') {
-      return await controller.useSkill(actionType, enrichedExtraData);
+      try {
+        return await controller.useSkill(actionType, enrichedExtraData);
+      } catch (err) {
+        getLogger().warn(`${player.name} 使用技能 ${actionType} 超时或出错，视为不使用技能: ${err.message}`);
+        return { success: false, message: '操作超时，技能未使用' };
+      }
     }
   }
 
@@ -427,16 +442,36 @@ class GameEngine extends EventEmitter {
   // ========== 玩家行动 API ==========
 
   // 发言
-  speak(playerId, content, visibility = 'public', actionType = 'speak') {
+  speak(playerId, content, visibility = VISIBILITY.PUBLIC, actionType) {
     const player = this.players.find(p => p.id === playerId);
     if (!player) return;
 
-    // 遗言使用不同的消息类型
-    const messageType = actionType === 'last_words' ? 'last_words' : 'speech';
+    // 确定消息类型和模板
+    let messageType, templateKey;
+    if (actionType === ACTION.LAST_WORDS) {
+      messageType = 'last_words';
+      templateKey = 'LAST_WORDS';
+    } else if (visibility === VISIBILITY.CAMP) {
+      messageType = 'wolf_speech';
+      templateKey = 'WOLF_SPEECH';
+    } else if (actionType === ACTION.SHERIFF_SPEECH) {
+      messageType = PHASE.SHERIFF_SPEECH;
+      templateKey = 'SHERIFF_SPEECH';
+    } else {
+      messageType = MSG.SPEECH;
+      templateKey = 'SPEECH';
+    }
+
+    // 使用模板构建带标签的内容
+    const playerDisplay = getPlayerDisplay(this.players, player);
+    const formattedContent = buildMessage(templateKey, {
+      player: playerDisplay,
+      content: content
+    });
 
     this.message.add({
       type: messageType,
-      content,
+      content: formattedContent,
       playerId,
       playerName: player.name,
       visibility
@@ -450,7 +485,8 @@ class GameEngine extends EventEmitter {
     if (!voter) return { success: false, error: '投票者不存在' };
 
     // 检查是否限制了投票目标（如PK投票只能投给平票候选人）
-    if (extraData?.allowedTargets && !extraData.allowedTargets.includes(Number(targetId))) {
+    // 空数组表示无限制
+    if (extraData?.allowedTargets?.length > 0 && !extraData.allowedTargets.includes(Number(targetId))) {
       return { success: false, error: '只能投票给候选人' };
     }
 
@@ -535,17 +571,56 @@ class GameEngine extends EventEmitter {
     if (deadPlayer.id === this.sheriff && !deadPlayer.alive) {
       const { ATTACHMENTS } = require('./roles');
       const sheriffAttachment = ATTACHMENTS.sheriff;
-      const passBadgeSkill = sheriffAttachment?.skills?.passBadge;
+      const passBadgeSkill = sheriffAttachment?.skills?.[ACTION.PASS_BADGE];
       if (passBadgeSkill?.availablePhases?.includes(currentPhase)) {
         const extraData = { deathReason: deadPlayer.deathReason };
         if (!passBadgeSkill.canUse || passBadgeSkill.canUse(deadPlayer, this, extraData)) {
           // 通过 controller.useSkill 执行（内部会调 skill.execute）
           const controller = this.getPlayerController(deadPlayer.id);
           if (controller && typeof controller.useSkill === 'function') {
-            await controller.useSkill('passBadge', extraData);
+            await controller.useSkill(ACTION.PASS_BADGE, extraData);
           }
         }
       }
+    }
+  }
+
+  /**
+   * 统一死亡处理管道：遗言 → 死亡技能+警徽移交，处理连锁死亡
+   * @param {Array} initialDeaths - 初始死亡列表（已被 handleDeath 处理过）
+   * @param {string} phase - 当前阶段
+   */
+  async processDeathChain(initialDeaths, phase) {
+    const initialSet = new Set(initialDeaths.map(d => d.id));
+    // 初始死亡入队
+    this.deathQueue.push(...initialDeaths);
+
+    while (this.deathQueue.length > 0) {
+      const player = this.deathQueue.shift();
+      const isInitial = initialSet.has(player.id);
+
+      // 初始死亡已被 handleDeath 处理过（alive=false），跳过存活检查
+      // 连锁死亡需要检查存活并处理
+      if (!isInitial) {
+        if (!player || !player.alive) continue;
+        player.deathReason = player.deathReason || DEATH_REASON.HUNTER;
+        const deathResult = this.handleDeath(player, player.deathReason);
+        if (deathResult.cancelled) continue;
+        this.message.add({
+          type: MSG.DEATH_ANNOUNCE,
+          content: `${getPlayerDisplay(this.players, player)} 死亡`,
+          deaths: [player],
+          visibility: VISIBILITY.PUBLIC
+        });
+      }
+
+      // 遗言（仅初始死亡，按 hasLastWords 判断）
+      if (isInitial && this.config.hooks?.hasLastWords(player, player.deathReason, this)) {
+        await this.callSpeech(player.id, ACTION.LAST_WORDS);
+      }
+
+      // 死亡技能 + 警徽移交
+      await this.handleDeathAbility(player, phase);
     }
   }
 
@@ -584,7 +659,7 @@ class GameEngine extends EventEmitter {
     const phase = this.phaseManager?.getCurrentPhase();
 
     // 如果游戏已结束，确保 phase 返回 game_over
-    const currentPhaseId = this.winner ? 'game_over' : (phase?.id || 'waiting');
+    const currentPhaseId = this.winner ? PHASE.GAME_OVER : (phase?.id || 'waiting');
 
     const state = {
       phase: currentPhaseId,
@@ -617,7 +692,7 @@ class GameEngine extends EventEmitter {
         roles: this.preset.roles,
         ruleDescriptions: this.preset.ruleDescriptions
       } : null,
-      dayCount: this.dayCount,
+      dayCount: this.round,
       winner: this.winner,
       // 游戏结束时的完整信息（复用 _checkGameEnd 中已计算的 gameOverInfo）
       gameOverInfo: this.gameOverInfo || null,
@@ -638,6 +713,9 @@ class GameEngine extends EventEmitter {
       state.self = {
         id: player.id,
         name: player.name,
+        background: player.background,
+        thinking: player.thinking,
+        speaking: player.speaking,
         role: player.role,
         state: player.state,
         alive: player.alive,
@@ -720,8 +798,11 @@ class GameEngine extends EventEmitter {
       player.state = role.state ? { ...role.state } : {};
     }
 
-    // 随机打乱玩家在数组中的位置（用于发言顺序等），但不改变 ID
+    // 随机打乱玩家位置，然后重新分配 ID（保证位置编号 = ID）
     shuffle(this.players);
+    this.players.forEach((player, index) => {
+      player.id = index + 1;
+    });
   }
 
   // ========== 发言顺序相关方法 ==========
@@ -744,9 +825,9 @@ class GameEngine extends EventEmitter {
     });
   }
 
-  // 获取玩家位置（编号）
+  // 获取玩家位置（ID = 位置编号）
   getPosition(playerId) {
-    return getPosition(this.players, playerId);
+    return playerId;
   }
 
   // 记录本轮死亡的第一位玩家（用于下一轮发言顺序）

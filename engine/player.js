@@ -6,6 +6,7 @@
 
 const { createLogger } = require('../utils/logger');
 const { getPlayerDisplay } = require('./utils');
+const { ACTION, VISIBILITY } = require('./constants');
 
 // 创建日志实例（延迟初始化）
 let backendLogger = null;
@@ -52,7 +53,7 @@ class PlayerController {
     let skill = player.role?.skills?.[actionType];
 
     // 全局机制技能（不绑定特定角色）
-    const globalMechanicSkills = ['campaign', 'withdraw', 'assignOrder', 'passBadge'];
+    const globalMechanicSkills = [ACTION.SHERIFF_CAMPAIGN, ACTION.WITHDRAW, ACTION.ASSIGN_ORDER, ACTION.PASS_BADGE];
     if (!skill && globalMechanicSkills.includes(actionType)) {
       const { ATTACHMENTS } = require('./roles');
       skill = ATTACHMENTS.sheriff?.skills?.[actionType];
@@ -106,7 +107,7 @@ class PlayerController {
     }
 
     // cupid 类型（连接两个玩家）
-    if (actionType === 'cupid' && extraData?.allowedTargets?.length >= 2) {
+    if (actionType === ACTION.CUPID && extraData?.allowedTargets?.length >= 2) {
       return extraData.allowedTargets.map(id => `${id}号`).join(', ');
     }
 
@@ -163,7 +164,13 @@ class PlayerController {
                      action?.targetId ? parseInt(action.targetId) : null;
 
     // 猎人开枪：允许 targetId 为 null（放弃开枪）
-    if (skill.id === 'shoot' && !targetId) {
+    if (skill.id === ACTION.SHOOT && !targetId) {
+      skill.execute(null, player, this.game);
+      return { success: true, targetId: null };
+    }
+
+    // 警徽移交：允许 targetId 为 null（警徽流失）
+    if (skill.id === ACTION.PASS_BADGE && !targetId) {
       skill.execute(null, player, this.game);
       return { success: true, targetId: null };
     }
@@ -187,7 +194,8 @@ class PlayerController {
 
   // double_target 类型技能执行（丘比特）
   executeDoubleTargetSkill(skill, player, action) {
-    const targetIds = action?.targetIds;
+    // 兼容 targets 和 targetIds 两种格式
+    const targetIds = action?.targets || action?.targetIds;
     if (!targetIds || targetIds.length !== 2) {
       return { success: false, message: '需要选择两个目标' };
     }
@@ -218,25 +226,25 @@ class PlayerController {
     if (confirmed) {
       skill.execute(null, player, this.game);
       // 根据技能类型返回对应格式，保持与 phase.js 兼容
-      if (skill.id === 'campaign') return { success: true, run: true };
-      if (skill.id === 'withdraw') return { success: true, withdraw: true };
+      if (skill.id === ACTION.SHERIFF_CAMPAIGN) return { success: true, run: true };
+      if (skill.id === ACTION.WITHDRAW) return { success: true, withdraw: true };
       return { success: true, confirmed: true };
     }
     // 失败时也返回对应格式
-    if (skill.id === 'campaign') return { success: false, run: false };
-    if (skill.id === 'withdraw') return { success: false, withdraw: false };
+    if (skill.id === ACTION.SHERIFF_CAMPAIGN) return { success: false, run: false };
+    if (skill.id === ACTION.WITHDRAW) return { success: false, withdraw: false };
     return { success: false, confirmed: false };
   }
 
   // ========== 抽象方法（子类实现）==========
 
   // 获取发言决策结果
-  async getSpeechResult(visibility = 'public', actionType = 'speak') {
+  async getSpeechResult(visibility = VISIBILITY.PUBLIC, actionType) {
     throw new Error('Not implemented');
   }
 
   // 获取投票决策结果（actionType 用于区分狼人投票和白天的投票）
-  async getVoteResult(actionType = 'vote', extraData = {}) {
+  async getVoteResult(actionType, extraData = {}) {
     throw new Error('Not implemented');
   }
 
@@ -251,13 +259,13 @@ class PlayerController {
  */
 class HumanController extends PlayerController {
   // 获取发言决策结果
-  async getSpeechResult(visibility = 'public', actionType = 'speak') {
+  async getSpeechResult(visibility = VISIBILITY.PUBLIC, actionType) {
     const response = await this.game.requestAction(this.playerId, actionType, { visibility });
     return { content: response?.content || '' };
   }
 
   // 获取投票决策结果（actionType 用于区分狼人投票和白天的投票）
-  async getVoteResult(actionType = 'vote', extraData = {}) {
+  async getVoteResult(actionType, extraData = {}) {
     const response = await this.game.requestAction(this.playerId, actionType, extraData);
     return { targetId: response?.targetId };
   }

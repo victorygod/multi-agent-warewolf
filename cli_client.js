@@ -22,6 +22,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { BOARD_PRESETS } = require('./engine/config');
+const { PHASE, ACTION, MSG, VISIBILITY, CAMP, ROLE_TYPE } = require('./engine/constants');
 
 // ========== 常量 ==========
 
@@ -42,33 +43,26 @@ const CAMP_NAMES = {
   third: '第三方'
 };
 const PHASE_PROMPTS = {
-  cupid: '丘比特正在选择情侣...',
-  guard: '守卫正在守护...',
-  night_werewolf_discuss: '狼人正在讨论...',
-  night_werewolf_vote: '狼人正在投票...',
-  witch: '女巫正在行动...',
-  seer: '预言家正在查验...',
-  sheriff_campaign: '警长竞选中...',
-  sheriff_speech: '竞选发言中...',
-  sheriff_vote: '警长投票中...',
-  day_announce: '天亮了！',
-  last_words: '遗言阶段...',
-  day_discuss: '白天讨论中...',
-  day_vote: '投票中...',
-  post_vote: '放逐后处理中...',
+  [PHASE.CUPID]: '丘比特正在选择情侣...',
+  [PHASE.GUARD]: '守卫正在守护...',
+  [PHASE.NIGHT_WEREWOLF_DISCUSS]: '狼人正在讨论...',
+  [PHASE.NIGHT_WEREWOLF_VOTE]: '狼人正在投票...',
+  [PHASE.WITCH]: '女巫正在行动...',
+  [PHASE.SEER]: '预言家正在查验...',
+  [PHASE.SHERIFF_CAMPAIGN]: '警长竞选中...',
+  [PHASE.SHERIFF_SPEECH]: '竞选发言中...',
+  [PHASE.SHERIFF_VOTE]: '警长投票中...',
+  [PHASE.DAY_ANNOUNCE]: '天亮了！',
+  [ACTION.LAST_WORDS]: '遗言阶段...',
+  [PHASE.DAY_DISCUSS]: '白天讨论中...',
+  [PHASE.DAY_VOTE]: '投票中...',
+  [PHASE.POST_VOTE]: '放逐后处理中...',
   waiting: '等待玩家加入',
   game_over: '游戏结束'
 };
 
 // ========== 工具函数 ==========
 
-function getPlayerPos(playerId, players) {
-  if (players) {
-    const idx = players.findIndex(p => p.id === playerId);
-    return idx >= 0 ? idx + 1 : playerId;
-  }
-  return playerId;
-}
 
 function formatTime(date) {
   return date.toTimeString().split(' ')[0];
@@ -142,9 +136,9 @@ function formatState(state, options) {
     lines.push(`阶段: 游戏结束`);
     lines.push(`获胜方: ${winnerText}`);
   } else {
-    const dayNight = ['cupid', 'guard', 'night_werewolf_discuss', 'night_werewolf_vote', 'witch', 'seer'].includes(state.phase) ? '夜' : '天';
+    const dayNight = [PHASE.CUPID, PHASE.GUARD, PHASE.NIGHT_WEREWOLF_DISCUSS, PHASE.NIGHT_WEREWOLF_VOTE, PHASE.WITCH, PHASE.SEER].includes(state.phase) ? '夜' : '天';
     lines.push(`=== 游戏状态 ===`);
-    lines.push(`阶段: ${phaseName} | 第${state.dayCount}${dayNight}`);
+    lines.push(`阶段: ${phaseName} | 第${state.dayCount || 1}${dayNight}`);
   }
 
   // 角色信息
@@ -159,8 +153,8 @@ function formatState(state, options) {
     if (state.self.seerChecks?.length > 0) {
       const checks = state.self.seerChecks.map(c => {
         const target = state.players?.find(p => p.id === c.targetId);
-        const pos = getPlayerPos(c.targetId, state.players);
-        const result = c.result === 'good' ? '好人' : '狼人';
+        const pos = c.targetId;
+        const result = c.result === CAMP.GOOD ? '好人' : '狼人';
         return `${pos}号(${result})`;
       }).join(', ');
       lines.push(`已查验: ${checks}`);
@@ -169,11 +163,11 @@ function formatState(state, options) {
       lines.push(`解药: ${state.self.witchHeal || 0}瓶 | 毒药: ${state.self.witchPoison || 0}瓶`);
     }
     if (state.self.lastGuardTarget) {
-      const pos = getPlayerPos(state.self.lastGuardTarget, state.players);
+      const pos = state.self.lastGuardTarget;
       lines.push(`上晚守护: ${pos}号`);
     }
     if (state.self.isCouple && state.self.couplePartner) {
-      const pos = getPlayerPos(state.self.couplePartner, state.players);
+      const pos = state.self.couplePartner;
       lines.push(`情侣: ${pos}号`);
     }
   }
@@ -193,7 +187,7 @@ function formatState(state, options) {
       } else if (p.id === myId && state.self?.role) {
         const roleId = state.self.role.id || state.self.role;
         line += ` (${ROLE_NAMES[roleId] || roleId})`;
-      } else if (state.self?.role?.camp === 'wolf' && p.role?.camp === 'wolf') {
+      } else if (state.self?.role?.camp === CAMP.WOLF && p.role?.camp === CAMP.WOLF) {
         const roleId = p.role.id || p.role;
         line += ` (${ROLE_NAMES[roleId] || roleId})`;
       }
@@ -203,7 +197,7 @@ function formatState(state, options) {
       if (state.sheriff === p.id) marks.push('[警长]');
       if (!p.alive) marks.push('[已死亡]');
       if (p.id === myId) marks.push('← 你');
-      if (state.self?.role?.camp === 'wolf' && p.role?.camp === 'wolf' && p.id !== myId) {
+      if (state.self?.role?.camp === CAMP.WOLF && p.role?.camp === CAMP.WOLF && p.id !== myId) {
         marks.push('[队友]');
       }
       if (marks.length > 0) {
@@ -221,39 +215,11 @@ function formatState(state, options) {
     // 只显示最近 20 条消息
     const recentMessages = state.messages.slice(-20);
     recentMessages.forEach(msg => {
-      let msgLine = '';
+      if (!msg.content) return;
       const time = msg.timestamp ? formatTime(new Date(msg.timestamp)) : '';
-
-      switch (msg.type) {
-        case 'speech':
-        case 'sheriff_speech':
-          const speaker = state.players?.find(p => p.id === msg.playerId);
-          const speakerPos = speaker ? getPlayerPos(speaker.id, state.players) : '?';
-          msgLine = `  [${time}] ${speakerPos}号 ${speaker?.name || '?'}: ${msg.content}`;
-          break;
-        case 'system':
-          msgLine = `  [${time}] 系统: ${msg.content}`;
-          break;
-        case 'phase_start':
-          msgLine = `  [${time}] === ${msg.content} ===`;
-          break;
-        case 'vote_result':
-          msgLine = `  [${time}] ${msg.content || ''}`;
-          break;
-        case 'death':
-          msgLine = `  [${time}] ${msg.content}`;
-          break;
-        case 'action':
-          msgLine = `  [${time}] ${msg.content}`;
-          break;
-        default:
-          if (msg.content) {
-            msgLine = `  [${time}] ${msg.content}`;
-          }
-      }
-      if (msgLine) {
-        lines.push(msgLine);
-      }
+      const prefix = msg.type === 'phase_start' ? '===' : '';
+      const suffix = msg.type === 'phase_start' ? '===' : '';
+      lines.push(`  [${time}] ${prefix}${msg.content}${suffix}`);
     });
   }
 
@@ -262,7 +228,7 @@ function formatState(state, options) {
     lines.push('');
     lines.push('玩家身份:');
     state.gameOverInfo.players.forEach(p => {
-      const pos = state.players ? getPlayerPos(p.id, state.players) : p.id;
+      const pos = state.players ? p.id : p.id;
       const display = p.display || `${pos}号${p.name}`;
       const roleName = p.role ? ROLE_NAMES[p.role.id] || p.role.id : '未知';
       const deathInfo = p.alive ? '存活' : (p.deathReason ? `死亡(${p.deathReason})` : '死亡');
@@ -285,42 +251,51 @@ function generateOptions(state, pendingAction) {
   const myId = state.self?.id;
 
   switch (action) {
-    case 'speak':
-    case 'last_words':
+    case ACTION.LAST_WORDS:
+    case ACTION.DAY_DISCUSS:
+    case ACTION.NIGHT_WEREWOLF_DISCUSS:
+    case ACTION.SHERIFF_SPEECH:
+      const prompts = {
+        [ACTION.LAST_WORDS]: '轮到你留遗言',
+        [ACTION.DAY_DISCUSS]: '轮到你发言讨论',
+        [ACTION.NIGHT_WEREWOLF_DISCUSS]: '狼人讨论 - 轮到你发言',
+        [ACTION.SHERIFF_SPEECH]: '警长竞选发言'
+      };
       return {
         type: 'input',
-        prompt: action === 'last_words' ? '轮到你留遗言' : '轮到你发言',
+        prompt: prompts[action] || '轮到你发言',
         requestId
       };
 
-    case 'vote':
-    case 'wolf_vote':
-    case 'sheriff_vote':
+    case ACTION.DAY_VOTE:
+    case ACTION.POST_VOTE:
+    case ACTION.NIGHT_WEREWOLF_VOTE:
+    case ACTION.SHERIFF_VOTE:
       return generateVoteOptions(state, myPlayer, data, requestId, action);
 
-    case 'guard':
+    case ACTION.GUARD:
       return generateGuardOptions(state, myPlayer, data, requestId);
 
-    case 'seer':
+    case ACTION.SEER:
       return generateSeerOptions(state, myPlayer, data, requestId);
 
-    case 'witch':
+    case ACTION.WITCH:
       return generateWitchOptions(state, myPlayer, data, requestId);
 
-    case 'cupid':
+    case ACTION.CUPID:
       return generateCupidOptions(state, myPlayer, data, requestId);
 
-    case 'shoot':
+    case ACTION.SHOOT:
       return generateShootOptions(state, myPlayer, data, requestId);
 
-    case 'campaign':
+    case ACTION.SHERIFF_CAMPAIGN:
       return generateCampaignOptions(requestId);
 
-    case 'withdraw':
+    case ACTION.WITHDRAW:
       return generateWithdrawOptions(requestId);
 
-    case 'assignOrder':
-    case 'passBadge':
+    case ACTION.ASSIGN_ORDER:
+    case ACTION.PASS_BADGE:
       return generateTargetOptions(state, myPlayer, data, requestId, action);
 
     default:
@@ -334,12 +309,12 @@ function generateVoteOptions(state, myPlayer, data, requestId, actionType) {
     ? state.players.filter(p => p.alive && allowedTargets.includes(p.id))
     : state.players.filter(p => p.alive && p.id !== myPlayer?.id);
 
-  const isWolfVote = actionType === 'wolf_vote';
-  const isWolf = state.self?.role?.camp === 'wolf';
+  const isWolfVote = actionType === ACTION.NIGHT_WEREWOLF_VOTE;
+  const isWolf = state.self?.role?.camp === CAMP.WOLF;
 
   const options = candidates.map(p => {
-    const pos = getPlayerPos(p.id, state.players);
-    const isTeammate = p.role?.camp === 'wolf';
+    const pos = p.id;
+    const isTeammate = p.role?.camp === CAMP.WOLF;
     const sheriffMark = state.sheriff === p.id ? ' [警长]' : '';
     const label = isWolfVote && isWolf && isTeammate
       ? `刀 ${pos}号 ${p.name} [队友]${sheriffMark}`
@@ -349,7 +324,7 @@ function generateVoteOptions(state, myPlayer, data, requestId, actionType) {
 
   options.push({ label: '弃权', data: { targetId: null } });
 
-  const prompt = isWolfVote ? '请选择刀人目标:' : (actionType === 'sheriff_vote' ? '请投票选警长:' : '请投票:');
+  const prompt = isWolfVote ? '请选择刀人目标:' : (actionType === ACTION.SHERIFF_VOTE ? '请投票选警长:' : '请投票:');
   return { type: 'select', prompt, options, requestId };
 }
 
@@ -362,7 +337,7 @@ function generateGuardOptions(state, myPlayer, data, requestId) {
   const options = [];
   candidates.forEach(p => {
     if (p.id === lastGuardTarget) return; // 不能连守
-    const pos = getPlayerPos(p.id, state.players);
+    const pos = p.id;
     options.push({ label: `守护 ${pos}号 ${p.name}`, data: { targetId: p.id } });
   });
 
@@ -370,7 +345,7 @@ function generateGuardOptions(state, myPlayer, data, requestId) {
 
   let prompt = '请选择守护目标:';
   if (lastGuardTarget) {
-    const pos = getPlayerPos(lastGuardTarget, state.players);
+    const pos = lastGuardTarget;
     prompt += ` (上晚守护: ${pos}号)`;
   }
   return { type: 'select', prompt, options, requestId };
@@ -383,7 +358,7 @@ function generateSeerOptions(state, myPlayer, data, requestId) {
     : state.players.filter(p => p.alive && p.id !== myPlayer?.id);
 
   const options = candidates.map(p => {
-    const pos = getPlayerPos(p.id, state.players);
+    const pos = p.id;
     return { label: `查验 ${pos}号 ${p.name}`, data: { targetId: p.id } };
   });
 
@@ -393,8 +368,8 @@ function generateSeerOptions(state, myPlayer, data, requestId) {
   const checks = state.self?.seerChecks || [];
   const extra = checks.length > 0
     ? '已查验: ' + checks.map(c => {
-        const pos = getPlayerPos(c.targetId, state.players);
-        const result = c.result === 'good' ? '好人' : '狼人';
+        const pos = c.targetId;
+        const result = c.result === CAMP.GOOD ? '好人' : '狼人';
         return `${pos}号(${result})`;
       }).join(', ')
     : null;
@@ -410,7 +385,7 @@ function generateWitchOptions(state, myPlayer, data, requestId) {
   // 显示被杀者
   if (werewolfTarget) {
     const target = state.players.find(p => p.id === werewolfTarget);
-    const pos = getPlayerPos(werewolfTarget, state.players);
+    const pos = werewolfTarget;
     const isSelf = werewolfTarget === myPlayer?.id;
     if (isSelf && !canSelfHeal) {
       prompt = `今晚 ${pos}号${target?.name || ''} 被狼人杀害！（非首夜不能自救）`;
@@ -431,7 +406,7 @@ function generateWitchOptions(state, myPlayer, data, requestId) {
     poisonTargets.forEach(id => {
       const p = state.players.find(p => p.id === id);
       if (p) {
-        const pos = getPlayerPos(id, state.players);
+        const pos = id;
         options.push({ label: `毒杀 ${pos}号 ${p.name}`, data: { action: 'poison', targetId: p.id } });
       }
     });
@@ -446,7 +421,7 @@ function generateCupidOptions(state, myPlayer, data, requestId) {
   const candidates = state.players?.filter(p => p.alive) || [];
 
   const options = candidates.map(p => {
-    const pos = getPlayerPos(p.id, state.players);
+    const pos = p.id;
     return { label: `${pos}号 ${p.name}`, data: { targetId: p.id } };
   });
 
@@ -467,7 +442,7 @@ function generateShootOptions(state, myPlayer, data, requestId) {
     : state.players.filter(p => p.alive && p.id !== myPlayer?.id);
 
   const options = candidates.map(p => {
-    const pos = getPlayerPos(p.id, state.players);
+    const pos = p.id;
     return { label: `🔫 ${pos}号 ${p.name}`, data: { targetId: p.id } };
   });
 
@@ -507,20 +482,20 @@ function generateTargetOptions(state, myPlayer, data, requestId, action) {
     : state.players.filter(p => p.alive && p.id !== myPlayer?.id);
 
   const prompts = {
-    assignOrder: '请指定发言顺序:',
-    passBadge: '警长请选择传警徽对象:'
+    [ACTION.ASSIGN_ORDER]: '请指定发言顺序:',
+    [ACTION.PASS_BADGE]: '警长请选择传警徽对象:'
   };
 
   const options = candidates.map(p => {
-    const pos = getPlayerPos(p.id, state.players);
+    const pos = p.id;
     const sheriffMark = state.sheriff === p.id ? ' [警长]' : '';
-    if (action === 'passBadge') {
+    if (action === ACTION.PASS_BADGE) {
       return { label: `传给 ${pos}号 ${p.name}${sheriffMark}`, data: { targetId: p.id } };
     }
     return { label: `${pos}号 ${p.name}`, data: { targetId: p.id } };
   });
 
-  if (action === 'passBadge') {
+  if (action === ACTION.PASS_BADGE) {
     options.push({ label: '不传警徽', data: { targetId: null } });
   }
 
@@ -536,7 +511,7 @@ function generateChooseTargetOptions(state, myPlayer, data, requestId) {
   const options = [];
   candidates.forEach(p => {
     if (disabledIds?.includes(p.id)) return;
-    const pos = getPlayerPos(p.id, state.players);
+    const pos = p.id;
     options.push({ label: `${pos}号 ${p.name}`, data: { targetId: p.id } });
   });
 
@@ -942,7 +917,7 @@ class Daemon {
     if (!this.state?.players) return null;
     const parts = ids.map(id => {
       if (id == null) return null;
-      const pos = getPlayerPos(id, this.state.players);
+      const pos = id;
       const p = this.state.players.find(p => p.id === id);
       return `id=${id} → ${pos}号${p?.name || ''}`;
     }).filter(Boolean);
@@ -1151,7 +1126,8 @@ class Daemon {
     }
 
     const { action, requestId } = this.state.pendingAction;
-    if (action !== 'speak' && action !== 'last_words') {
+    const speakActions = [ACTION.LAST_WORDS, ACTION.DAY_DISCUSS, ACTION.NIGHT_WEREWOLF_DISCUSS, ACTION.SHERIFF_SPEECH];
+    if (!speakActions.includes(action)) {
       client.end(JSON.stringify({ error: '当前不是发言阶段' }));
       return;
     }

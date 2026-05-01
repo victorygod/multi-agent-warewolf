@@ -1,9 +1,0 @@
-1776792551172 [INFO] server.js:405 服务器启动: http://localhost:3000
-1776792558406 [INFO] server.js:366 新连接
-1776792574504 [INFO] server.js:366 新连接
-1776792610672 [INFO] engine/phase.js:403 ========== 第 1 天 ==========
-1776792610672 [INFO] engine/phase.js:454 进入阶段: cupid
-1776792610673 [DEBUG] server.js:161 新消息: phase_start | 丘比特连线
-1776792610674 [INFO] engine/player.js:279 aa 使用技能 cupid，可选: 1号aa, 2号小云, 3号小红, 4号小霞, 5号大刚, 6号小玲, 7号阿鹏, 8号Claude, 9号阿伟, 10号阿杰, 11号大军, 12号小娟
-1776792610674 [INFO] server.js:152 请求 aa 行动: cupid | 可选: 1号aa, 2号小云, 3号小红, 4号小霞, 5号大刚, 6号小玲, 7号阿鹏, 8号Claude, 9号阿伟, 10号阿杰, 11号大军, 12号小娟
-1776792610674 [INFO] server.js:348 游戏开始！玩家数：12

@@ -2,10 +2,15 @@
  * 游戏配置 - 所有业务规则定义
  */
 
+const { ACTION, CAMP, ROLE_TYPE, DEATH_REASON } = require('./constants');
+
 // 规则配置
 const RULES = {
   guard: {
     allowRepeatGuard: false
+  },
+  wolf: {
+    unanimousVote: false  // 狼人投票是否必须统一，不统一则空刀
   },
   witch: {
     canSelfHeal: true,  // 仅首夜可以自救
@@ -23,14 +28,17 @@ const RULES = {
 // 标准胜利条件（屠边规则）
 function createStandardCheckWin() {
   return (game) => {
-    // 狼人胜利：屠边（神职全灭或村民全灭）
-    const gods = game.players.filter(p => p.alive && p.role.type === 'god');
-    const villagers = game.players.filter(p => p.alive && p.role.type === 'villager');
-    if (gods.length === 0 || villagers.length === 0) return 'wolf';
+    // 已翻牌白痴不计入任何阵营
+    const isRevealedIdiot = (p) => p.role.id === 'idiot' && p.state?.revealed;
+
+    // 狼人胜利：屠边（神职全灭或村民全灭），已翻牌白痴不算神职
+    const gods = game.players.filter(p => p.alive && !isRevealedIdiot(p) && p.role.type === ROLE_TYPE.GOD);
+    const villagers = game.players.filter(p => p.alive && p.role.type === ROLE_TYPE.VILLAGER);
+    if (gods.length === 0 || villagers.length === 0) return CAMP.WOLF;
 
     // 好人胜利：狼人全灭
-    const wolves = game.players.filter(p => p.alive && p.role.camp === 'wolf');
-    if (wolves.length === 0) return 'good';
+    const wolves = game.players.filter(p => p.alive && p.role.camp === CAMP.WOLF);
+    if (wolves.length === 0) return CAMP.GOOD;
 
     return null;
   };
@@ -48,7 +56,7 @@ function createCupidCheckWin() {
         const p = game.players.find(pl => pl.id === id);
         return p ? p.role.camp : null;
       });
-      return coupleCamps.includes('good') && coupleCamps.includes('wolf');
+      return coupleCamps.includes(CAMP.GOOD) && coupleCamps.includes(CAMP.WOLF);
     };
 
     // 获取第三方成员ID（丘比特+情侣）
@@ -66,7 +74,7 @@ function createCupidCheckWin() {
 
       // 人狼恋：丘比特和情侣始终为第三方
       const thirdPartyIds = getThirdPartyIds();
-      return thirdPartyIds.includes(player.id) ? 'third' : player.role.camp;
+      return thirdPartyIds.includes(player.id) ? CAMP.THIRD : player.role.camp;
     };
 
     // ===== 胜利判断 =====
@@ -83,24 +91,24 @@ function createCupidCheckWin() {
       // 其他人都死
       const othersDead = game.players.filter(p => !thirdPartyIds.includes(p.id)).every(p => !p.alive);
 
-      if (thirdPartyAlive && othersDead) return 'third';
+      if (thirdPartyAlive && othersDead) return CAMP.THIRD;
     }
 
     // 按实际阵营统计存活
     const alivePlayers = game.players.filter(p => p.alive);
     const aliveByCamp = {
-      good: alivePlayers.filter(p => getActualCamp(p) === 'good').length,
-      wolf: alivePlayers.filter(p => getActualCamp(p) === 'wolf').length,
-      third: alivePlayers.filter(p => getActualCamp(p) === 'third').length
+      good: alivePlayers.filter(p => getActualCamp(p) === CAMP.GOOD).length,
+      wolf: alivePlayers.filter(p => getActualCamp(p) === CAMP.WOLF).length,
+      third: alivePlayers.filter(p => getActualCamp(p) === CAMP.THIRD).length
     };
 
     // 好人胜利：狼人和第三方都死光
-    if (aliveByCamp.wolf === 0 && aliveByCamp.third === 0) return 'good';
+    if (aliveByCamp.wolf === 0 && aliveByCamp.third === 0) return CAMP.GOOD;
 
     // 狼人胜利：屠边且第三方死光
-    const gods = alivePlayers.filter(p => getActualCamp(p) !== 'third' && p.role.type === 'god');
-    const villagers = alivePlayers.filter(p => getActualCamp(p) !== 'third' && p.role.type === 'villager');
-    if ((gods.length === 0 || villagers.length === 0) && aliveByCamp.third === 0) return 'wolf';
+    const gods = alivePlayers.filter(p => getActualCamp(p) !== CAMP.THIRD && p.role.type === ROLE_TYPE.GOD);
+    const villagers = alivePlayers.filter(p => getActualCamp(p) !== CAMP.THIRD && p.role.type === ROLE_TYPE.VILLAGER);
+    if ((gods.length === 0 || villagers.length === 0) && aliveByCamp.third === 0) return CAMP.WOLF;
 
     return null;
   };
@@ -114,13 +122,13 @@ function getCamp(player, game) {
 // 遗言规则
 function hasLastWords(player, reason, game) {
   // 殉情死亡无遗言
-  if (reason === 'couple') return false;
+  if (reason === DEATH_REASON.COUPLE) return false;
 
   // 白天死亡有遗言
-  if (reason === 'vote' || reason === 'hunter') return true;
+  if (reason === DEATH_REASON.VOTE || reason === DEATH_REASON.HUNTER) return true;
 
   // 首夜死亡有遗言
-  if (game.nightCount === 0) return true;
+  if (game.round === 1) return true;
 
   // 第二夜及之后的夜晚死亡无遗言
   return false;
@@ -129,7 +137,7 @@ function hasLastWords(player, reason, game) {
 // 行动目标过滤规则（用于 buildActionData）
 const ACTION_FILTERS = {
   // 守卫：不能连续守护同一人、不能守护死亡玩家（可以守护自己）
-  guard: (game, player) => {
+  [ACTION.GUARD]: (game, player) => {
     const lastTarget = player.state?.lastGuardTarget;
     return game.players
       .filter(p => p.alive && p.id !== lastTarget)
@@ -137,7 +145,7 @@ const ACTION_FILTERS = {
   },
 
   // 女巫毒药：不能毒自己、不能毒被狼刀的人、不能毒死亡玩家
-  witch_poison: (game, player, extraData) => {
+  [ACTION.WITCH_POISON]: (game, player, extraData) => {
     const werewolfTarget = extraData?.werewolfTarget;
     return game.players
       .filter(p => p.id !== player.id && p.id !== werewolfTarget && p.alive)
@@ -145,36 +153,36 @@ const ACTION_FILTERS = {
   },
 
   // 预言家：不能查验自己、不能查验已查验的、不能查验死亡玩家
-  seer: (game, player) => {
+  [ACTION.SEER]: (game, player) => {
     const checkedIds = (player.state?.seerChecks || []).map(c => c.targetId);
     return game.players
       .filter(p => p.id !== player.id && p.alive && !checkedIds.includes(p.id))
       .map(p => p.id);
   },
 
-  // 白天投票：不能投自己、只能投存活玩家
-  vote: (game, player) => {
+  // 白天投票：不能投自己、只能投存活玩家、不能投已翻牌白痴
+  [ACTION.POST_VOTE]: (game, player) => {
     return game.players
-      .filter(p => p.alive && p.id !== player.id)
+      .filter(p => p.alive && p.id !== player.id && p.state?.canVote !== false)
       .map(p => p.id);
   },
 
   // 狼人投票：所有存活玩家（包括自己阵营的狼人）
-  wolf_vote: (game, player) => {
+  [ACTION.NIGHT_WEREWOLF_VOTE]: (game, player) => {
     return game.players
       .filter(p => p.alive)
       .map(p => p.id);
   },
 
   // 猎人射击：不能射自己、只能射存活玩家
-  shoot: (game, player) => {
+  [ACTION.SHOOT]: (game, player) => {
     return game.players
       .filter(p => p.alive && p.id !== player.id)
       .map(p => p.id);
   },
 
   // 警长传徽：不能传给自己、只能传给存活玩家
-  passBadge: (game, player) => {
+  [ACTION.PASS_BADGE]: (game, player) => {
     return game.players
       .filter(p => p.id !== player.id && p.alive)
       .map(p => p.id);
@@ -210,10 +218,12 @@ const BOARD_PRESETS = {
     rules: {
       witch: { canSelfHeal: true, canUseBothSameNight: true },
       hunter: { canShootIfPoisoned: false },
-      sheriff: { enabled: true, sheriffAssignOrder: true }
+      sheriff: { enabled: false }
     },
     ruleDescriptions: [
+      '游戏配置：9人局，狼人×3，预言家×1，女巫×1，猎人×1，村民×3，无警长',
       '女巫仅首夜可自救',
+      '狼人不会空刀',
       '猎人被毒不能开枪',
       '首夜和白天死亡有遗言，后续夜晚死亡无遗言',
       '狼人屠边（屠神或屠民）获胜'
@@ -232,8 +242,11 @@ const BOARD_PRESETS = {
       sheriff: { enabled: true, sheriffAssignOrder: true }
     },
     ruleDescriptions: [
+      '游戏配置：12人局，狼人×4，预言家×1，女巫×1，猎人×1，白痴×1，村民×4，有警长（1.5票权）',
       '女巫仅首夜可自救',
       '猎人被毒不能开枪',
+      '狼人不会空刀',
+      '白痴翻牌后免投票但可发言',
       '首夜和白天死亡有遗言，后续夜晚死亡无遗言',
       '狼人屠边（屠神或屠民）获胜'
     ],
@@ -248,13 +261,16 @@ const BOARD_PRESETS = {
     rules: {
       witch: { canSelfHeal: true, canUseBothSameNight: true },
       guard: { allowRepeatGuard: false },
+      wolf: { unanimousVote: true },
       hunter: { canShootIfPoisoned: false },
       sheriff: { enabled: true, sheriffAssignOrder: true }
     },
     ruleDescriptions: [
+      '游戏配置：12人局，狼人×4，预言家×1，女巫×1，守卫×1，猎人×1，丘比特×1，村民×3，有警长（1.5票权）',
       '女巫仅首夜可自救',
       '守卫不可连守',
       '同守同救则死亡',
+      '狼人投票必须统一，否则空刀',
       '猎人被毒不能开枪',
       '首夜和白天死亡有遗言，后续夜晚死亡无遗言',
       '情侣一方死亡另一方殉情',

@@ -6,6 +6,8 @@
 
 const { getPlayerDisplay } = require('./utils');
 const { createLogger } = require('../utils/logger');
+const { PHASE, ACTION, MSG, VISIBILITY, CAMP, DEATH_REASON } = require('./constants');
+const { buildMessage, formatVoteDetails } = require('./message_template');
 
 // 创建日志实例（延迟初始化，避免循环依赖）
 let backendLogger = null;
@@ -20,24 +22,39 @@ function getLogger() {
  * 每天的阶段流程
  */
 const PHASE_FLOW = [
+  // ========== 进入夜晚 ==========
+  {
+    id: PHASE.NIGHT_ENTER,
+    name: '进入夜晚',
+    execute: async (game) => {
+      game.message.add({
+        type: MSG.SYSTEM,
+        content: buildMessage('PHASE_NIGHT', { round: game.round }),
+        phase: PHASE.NIGHT_ENTER,
+        round: game.round,
+        visibility: VISIBILITY.PUBLIC
+      });
+    }
+  },
+
   // ========== 夜晚 ==========
 
   // 丘比特连线（仅第一夜）
   {
-    id: 'cupid',
+    id: PHASE.CUPID,
     name: '丘比特连线',
-    condition: (game) => game.nightCount === 0 && game.players.some(p => p.role.id === 'cupid'),
+    condition: (game) => game.round === 1 && game.players.some(p => p.role.id === 'cupid'),
     execute: async (game) => {
       const cupid = game.players.find(p => p.role.id === 'cupid' && p.alive);
       if (!cupid) return;
 
-      await game.callSkill(cupid.id, 'cupid');
+      await game.callSkill(cupid.id, ACTION.CUPID);
     }
   },
 
   // 守卫守护（每晚）
   {
-    id: 'guard',
+    id: PHASE.GUARD,
     name: '守卫守护',
     condition: (game) => game.players.some(p => p.role.id === 'guard' && p.alive),
     execute: async (game) => {
@@ -46,27 +63,27 @@ const PHASE_FLOW = [
 
       // 传递给前端上一晚守护的目标，用于禁用
       const lastGuardTarget = guard.state.lastGuardTarget;
-      await game.callSkill(guard.id, 'guard', { lastGuardTarget });
+      await game.callSkill(guard.id, ACTION.GUARD, { lastGuardTarget });
     }
   },
 
   // 狼人讨论（每晚）
   {
-    id: 'night_werewolf_discuss',
+    id: PHASE.NIGHT_WEREWOLF_DISCUSS,
     name: '狼人讨论',
-    condition: (game) => game.players.some(p => game.config.hooks.getCamp(p, game) === 'wolf' && p.alive),
+    condition: (game) => game.players.some(p => game.config.hooks.getCamp(p, game) === CAMP.WOLF && p.alive),
     execute: async (game) => {
-      const wolves = game.players.filter(p => game.config.hooks.getCamp(p, game) === 'wolf' && p.alive);
-      await game.callSpeech(wolves.map(w => w.id), 'speak', 'camp');
+      const wolves = game.players.filter(p => game.config.hooks.getCamp(p, game) === CAMP.WOLF && p.alive);
+      await game.callSpeech(wolves.map(w => w.id), ACTION.NIGHT_WEREWOLF_DISCUSS, VISIBILITY.CAMP);
     }
   },
 
   // 狼人投票
   {
-    id: 'night_werewolf_vote',
+    id: PHASE.NIGHT_WEREWOLF_VOTE,
     name: '狼人投票',
     execute: async (game) => {
-      const wolves = game.players.filter(p => game.config.hooks.getCamp(p, game) === 'wolf' && p.alive);
+      const wolves = game.players.filter(p => game.config.hooks.getCamp(p, game) === CAMP.WOLF && p.alive);
 
       // 清理上一轮的投票数据
       game.votes = {};
@@ -77,11 +94,33 @@ const PHASE_FLOW = [
         .map(p => p.id);
 
       // 并行让所有狼人投票（传递 actionType 和 allowedTargets）
-      await Promise.all(wolves.map(wolf => game.callVote(wolf.id, 'wolf_vote', { allowedTargets })));
+      await Promise.all(wolves.map(wolf => game.callVote(wolf.id, ACTION.NIGHT_WEREWOLF_VOTE, { allowedTargets })));
 
       // 使用 VoteManager 通用方法计算投票结果
       const { voteCounts, voteDetails } = game.voteManager.calculateVoteResults(wolves, { useWeight: false });
       const { maxVotes } = game.voteManager.findMaxVotes(voteCounts);
+
+      const unanimousVote = game.effectiveRules?.wolf?.unanimousVote ?? false;
+
+      // 狼人投票必须统一，否则空刀
+      if (unanimousVote && wolves.length > 1) {
+        const votedTargets = Object.values(game.votes).filter(v => v).map(Number);
+        const allSame = votedTargets.length > 0 && votedTargets.every(t => t === votedTargets[0]);
+
+        if (!allSame) {
+          game.werewolfTarget = null;
+          game.message.add({
+            type: MSG.WOLF_VOTE_RESULT,
+            content: buildMessage('WOLF_VOTE_EMPTY', {}),
+            visibility: VISIBILITY.CAMP,
+            playerId: wolves[0]?.id,
+            voteDetails,
+            voteCounts
+          });
+          game.votes = {};
+          return;
+        }
+      }
 
       // 处理平票：随机选择其中一个
       const topVotes = game.voteManager.findTopVotes(voteCounts, maxVotes);
@@ -95,9 +134,11 @@ const PHASE_FLOW = [
       // 发送狼人可见的投票结果消息
       const targetPlayer = game.players.find(p => p.id === werewolfTarget);
       game.message.add({
-        type: 'wolf_vote_result',
-        content: `狼人选择击杀 ${getPlayerDisplay(game.players, targetPlayer)}`,
-        visibility: 'camp',
+        type: MSG.WOLF_VOTE_RESULT,
+        content: buildMessage('WOLF_VOTE_RESULT', {
+          票型: formatVoteDetails(voteDetails)
+        }),
+        visibility: VISIBILITY.CAMP,
         playerId: wolves[0]?.id,
         voteDetails,
         voteCounts
@@ -109,7 +150,7 @@ const PHASE_FLOW = [
 
   // 女巫技能（每晚）
   {
-    id: 'witch',
+    id: PHASE.WITCH,
     name: '女巫技能',
     condition: (game) => game.players.some(p => p.role.id === 'witch'),
     execute: async (game) => {
@@ -121,37 +162,52 @@ const PHASE_FLOW = [
         werewolfTarget: game.werewolfTarget,
         healAvailable: witch.state?.heal > 0,
         poisonAvailable: witch.state?.poison > 0,
-        canSelfHeal: (game.effectiveRules?.witch?.canSelfHeal ?? true) && game.nightCount === 0
+        canSelfHeal: (game.effectiveRules?.witch?.canSelfHeal ?? true) && game.round === 1
       };
-      await game.callSkill(witch.id, 'witch', extraData);
+      await game.callSkill(witch.id, ACTION.WITCH, extraData);
     }
   },
 
   // 预言家查验
   {
-    id: 'seer',
+    id: PHASE.SEER,
     name: '预言家查验',
     condition: (game) => game.players.some(p => p.role.id === 'seer'),
     execute: async (game) => {
       const seer = game.players.find(p => p.role.id === 'seer' && p.alive);
       if (!seer) return;
 
-      await game.callSkill(seer.id, 'seer');
+      await game.callSkill(seer.id, ACTION.SEER);
     }
   },
 
   // ========== 白天 ==========
 
+  // 进入白天
+  {
+    id: PHASE.DAY_ENTER,
+    name: '进入白天',
+    execute: async (game) => {
+      game.message.add({
+        type: MSG.SYSTEM,
+        content: buildMessage('PHASE_DAY', { round: game.round }),
+        phase: PHASE.DAY_ENTER,
+        round: game.round,
+        visibility: VISIBILITY.PUBLIC
+      });
+    }
+  },
+
   // 警长竞选（仅第一天白天，公布死讯之前）
   {
-    id: 'sheriff_campaign',
+    id: PHASE.SHERIFF_CAMPAIGN,
     name: '警长竞选',
-    condition: (game) => game.dayCount === 0,
+    condition: (game) => game.round === 1 && (game.effectiveRules?.sheriff?.enabled !== false),
     execute: async (game) => {
       // 询问所有存活玩家是否参加竞选（并发执行，保密决定）
       const candidates = game.players.filter(p => p.alive);
       const results = await Promise.all(candidates.map(p =>
-        game.callSkill(p.id, 'campaign').then(r => ({ player: p, result: r }))
+        game.callSkill(p.id, ACTION.SHERIFF_CAMPAIGN).then(r => ({ player: p, result: r }))
       ));
       // 处理结果
       for (const { player, result } of results) {
@@ -165,9 +221,12 @@ const PHASE_FLOW = [
       const onStage = game.players.filter(p => p.state?.isCandidate && !p.state?.withdrew);
       const offStage = game.players.filter(p => !p.state?.isCandidate && p.alive);
       game.message.add({
-        type: 'sheriff_candidates',
-        content: `警上：${onStage.map(p => getPlayerDisplay(game.players, p)).join('、') || '无'} | 警下：${offStage.map(p => getPlayerDisplay(game.players, p)).join('、') || '无'}`,
-        visibility: 'public',
+        type: MSG.SHERIFF_CANDIDATES,
+        content: buildMessage('SHERIFF_CANDIDATES', {
+          警上列表: onStage.map(p => getPlayerDisplay(game.players, p)).join('，') || '无',
+          警下列表: offStage.map(p => getPlayerDisplay(game.players, p)).join('，') || '无'
+        }),
+        visibility: VISIBILITY.PUBLIC,
         metadata: {
           onStage: onStage.map(p => ({ id: p.id, name: p.name })),
           offStage: offStage.map(p => ({ id: p.id, name: p.name }))
@@ -178,17 +237,17 @@ const PHASE_FLOW = [
 
   // 警长竞选发言 + 退水
   {
-    id: 'sheriff_speech',
+    id: PHASE.SHERIFF_SPEECH,
     name: '警长竞选发言',
-    condition: (game) => game.dayCount === 0,
+    condition: (game) => game.round === 1 && (game.effectiveRules?.sheriff?.enabled !== false),
     execute: async (game) => {
       // 候选人发言
       const candidates = game.players.filter(p => p.alive && p.state?.isCandidate && !p.state?.withdrew);
-      await game.callSpeech(candidates.map(p => p.id));
+      await game.callSpeech(candidates.map(p => p.id), ACTION.SHERIFF_SPEECH);
 
       // 询问是否退水（并发执行）
       const results = await Promise.all(candidates.map(p =>
-        game.callSkill(p.id, 'withdraw').then(r => ({ player: p, result: r }))
+        game.callSkill(p.id, ACTION.WITHDRAW).then(r => ({ player: p, result: r }))
       ));
       // 处理结果
       for (const { player, result } of results) {
@@ -201,9 +260,9 @@ const PHASE_FLOW = [
 
   // 警长投票
   {
-    id: 'sheriff_vote',
+    id: PHASE.SHERIFF_VOTE,
     name: '警长投票',
-    condition: (game) => game.dayCount === 0,
+    condition: (game) => game.round === 1 && (game.effectiveRules?.sheriff?.enabled !== false),
     execute: async (game) => {
       // 使用 VoteManager 结算选举
       const candidates = game.players.filter(p => p.state?.isCandidate && !p.state?.withdrew);
@@ -216,89 +275,92 @@ const PHASE_FLOW = [
 
   // 公布死讯（包含夜晚结算）
   {
-    id: 'day_announce',
+    id: PHASE.DAY_ANNOUNCE,
     name: '公布死讯',
     execute: async (game) => {
-      // 夜晚结算
-      game.nightManager.resolve();
-      game.nightManager.process();
+      // 夜晚结算（原 nightManager.resolve 内联）
+      const deaths = [];
+      const deathReasons = new Map();
 
-      // 先检查首夜死亡遗言（此时 nightCount 还是 0）
-      const lastWordsPlayers = game._lastNightDeaths?.filter(p =>
-        game.config.hooks?.hasLastWords(p, p.deathReason, game)
-      ) || [];
-      if (lastWordsPlayers.length > 0) {
-        await game.callSpeech(lastWordsPlayers.map(p => p.id), 'last_words');
+      if (game.werewolfTarget) {
+        const target = game.players.find(p => p.id === game.werewolfTarget);
+        const guarded = game.guardTarget === game.werewolfTarget;
+        const healed = game.healTarget === game.werewolfTarget;
+        if (guarded && healed) {
+          deaths.push(target);
+          deathReasons.set(target.id, DEATH_REASON.CONFLICT);
+        } else if (!guarded && !healed) {
+          deaths.push(target);
+          deathReasons.set(target.id, DEATH_REASON.WEREWOLF);
+        }
       }
 
-      // 然后再增加 nightCount
-      game.nightCount++;
-      if (game.dayCount === 0) {
-        game.dayCount = 1;
+      if (game.poisonTarget) {
+        const target = game.players.find(p => p.id === game.poisonTarget);
+        if (!deaths.includes(target)) {
+          deaths.push(target);
+          deathReasons.set(target.id, DEATH_REASON.POISON);
+        }
       }
 
-      // 每天白天开始时清空警长指定的发言顺序，让警长可以重新指定
+      // 保留现有 deathQueue（如猎人开枪），夜晚死亡优先
+      const existingQueue = game.deathQueue || [];
+      game.deathQueue = [...deaths, ...existingQueue];
+
+      // 重置夜晚状态
+      game.werewolfTarget = null;
+      game.guardTarget = null;
+      game.healTarget = null;
+      game.poisonTarget = null;
+
+      // 夜晚死亡标记（原 nightManager.process 内联）
+      const allDeaths = [];
+      while (game.deathQueue.length > 0) {
+        const player = game.deathQueue.shift();
+        if (!player.alive) continue;
+        const reason = deathReasons.get(player.id) || player.deathReason || DEATH_REASON.VOTE;
+        game.handleDeath(player, reason);
+        allDeaths.push({ id: player.id, name: player.name, reason });
+      }
+      game._lastNightDeaths = allDeaths;
+
+      // 批量公告
+      if (game._lastNightDeaths?.length > 0) {
+        game.message.add({
+          type: MSG.DEATH_ANNOUNCE,
+          content: buildMessage('NIGHT_DEATH', {
+            玩家列表: game._lastNightDeaths.map(d => getPlayerDisplay(game.players, d)).join('，')
+          }),
+          deaths: game._lastNightDeaths,
+          visibility: VISIBILITY.PUBLIC
+        });
+      } else {
+        game.message.add({
+          type: MSG.SYSTEM,
+          content: buildMessage('PEACEFUL_NIGHT', {}),
+          visibility: VISIBILITY.PUBLIC
+        });
+      }
+
+      // 死亡管道：遗言 → 技能+警徽移交
+      if (game._lastNightDeaths?.length > 0) {
+        const deathPlayers = game._lastNightDeaths.map(d => game.players.find(p => p.id === d.id)).filter(Boolean);
+        await game.processDeathChain(deathPlayers, PHASE.DAY_ANNOUNCE);
+      }
+
+      // 每天白天开始时清空警长指定的发言顺序
       game.sheriffAssignOrder = null;
 
-      // 清空上一天的遗言玩家，避免PK投票无人出局时重复触发遗言
+      // 清空上一天的遗言玩家
       game.lastWordsPlayer = null;
 
       game.recordLastDeath();
-
-      if (game._lastNightDeaths?.length > 0) {
-        game.message.add({
-          type: 'death_announce',
-          content: game._lastNightDeaths.map(d => getPlayerDisplay(game.players, d)).join('、') + ' 死亡',
-          deaths: game._lastNightDeaths,
-          visibility: 'public'
-        });
-
-        // 处理猎人开枪（在遗言之前）
-        for (const deathInfo of game._lastNightDeaths) {
-          const death = game.players.find(p => p.id === deathInfo.id);
-          if (death?.role?.id === 'hunter' && death?.state?.canShoot) {
-            await game.handleDeathAbility(death, 'day_announce');
-          }
-        }
-
-        // 处理死亡队列中的人（猎人射杀、殉情等）
-        while (game.deathQueue.length > 0) {
-          const target = game.deathQueue.shift();
-          if (!target || !target.alive) continue;
-          target.deathReason = target.deathReason || 'hunter';
-          const deathResult = game.handleDeath(target, target.deathReason);
-          if (deathResult.cancelled) continue;
-          game.message.add({
-            type: 'death_announce',
-            content: `${getPlayerDisplay(game.players, target)} 死亡`,
-            deaths: [target],
-            visibility: 'public'
-          });
-        }
-
-        // 处理警长死亡（警徽传递）- 通过 handleDeathAbility 触发前端请求
-        for (const deathInfo of game._lastNightDeaths) {
-          if (deathInfo.id === game.sheriff) {
-            const sheriff = game.players.find(p => p.id === deathInfo.id);
-            if (sheriff && !sheriff.alive) {
-              // 使用 handleDeathAbility 来触发 passBadge 技能，让玩家选择传警徽对象
-              await game.handleDeathAbility(sheriff, 'day_announce');
-            }
-          }
-        }
-      } else {
-        game.message.add({
-          type: 'system',
-          content: '昨晚是平安夜',
-          visibility: 'public'
-        });
-      }
     }
   },
 
   // 白天讨论
   {
-    id: 'day_discuss',
+    id: PHASE.DAY_DISCUSS,
     name: '白天讨论',
     execute: async (game) => {
       // 警长指定发言起始位置（每天都可以指定）
@@ -307,18 +369,18 @@ const PHASE_FLOW = [
         const sheriff = game.players.find(p => p.id === game.sheriff);
         // 警长还活着且今天还没指定
         if (sheriff?.alive && !game.sheriffAssignOrder) {
-          await game.callSkill(sheriff.id, 'assignOrder');
+          await game.callSkill(sheriff.id, ACTION.ASSIGN_ORDER);
         }
       }
 
       const speakers = game.getSpeakerOrder().filter(p => game.canSpeak(p));
-      await game.callSpeech(speakers.map(p => p.id));
+      await game.callSpeech(speakers.map(p => p.id), ACTION.DAY_DISCUSS);
     }
   },
 
   // 白天投票
   {
-    id: 'day_vote',
+    id: PHASE.DAY_VOTE,
     name: '白天投票',
     execute: async (game) => {
       const voters = game.players.filter(p => p.alive && p.state?.canVote !== false);
@@ -329,7 +391,7 @@ const PHASE_FLOW = [
         .map(p => p.id);
 
       // 并行让所有存活玩家投票
-      await Promise.all(voters.map(voter => game.callVote(voter.id, 'vote', { allowedTargets: getAllowedTargets(voter.id) })));
+      await Promise.all(voters.map(voter => game.callVote(voter.id, ACTION.DAY_VOTE, { allowedTargets: getAllowedTargets(voter.id) })));
 
       // 不在这里结算，留到 post_vote 阶段统一处理
     }
@@ -337,49 +399,16 @@ const PHASE_FLOW = [
 
   // 放逐后处理
   {
-    id: 'post_vote',
+    id: PHASE.POST_VOTE,
     name: '放逐后处理',
     execute: async (game) => {
       // 结算投票（显示票型）
       await game.voteManager.resolve();
       game.votes = {};
 
-      // 处理死亡玩家的遗言和警徽传递
+      // 死亡管道：遗言 → 技能+警徽移交
       if (game.lastWordsPlayer) {
-        const deadPlayer = game.lastWordsPlayer;
-
-        // 1. 遗言阶段
-        if (game.config.hooks?.hasLastWords(deadPlayer, 'vote', game)) {
-          await game.callSpeech(deadPlayer.id, 'last_words');
-        }
-
-        // 2. 检查并触发死亡技能（如猎人射击、警长传警徽）
-        await game.handleDeathAbility(deadPlayer, 'post_vote');
-      }
-
-      // 处理死亡队列中的其他死亡（如猎人开枪射杀、殉情）
-      while (game.deathQueue.length > 0) {
-        const player = game.deathQueue.shift();
-        if (!player || !player.alive) continue;
-
-        // 设置死亡原因并处理死亡
-        player.deathReason = player.deathReason || 'hunter';
-        const deathResult = game.handleDeath(player, player.deathReason);
-
-        if (deathResult.cancelled) continue;
-
-        // 添加死亡公告（不暴露死因）
-        game.message.add({
-          type: 'death_announce',
-          content: `${getPlayerDisplay(game.players, player)} 死亡`,
-          deaths: [player],
-          visibility: 'public'
-        });
-
-        // 处理警长死亡（通过 handleDeathAbility 触发 passBadge 技能）
-        if (player.id === game.sheriff) {
-          await game.handleDeathAbility(player, 'post_vote');
-        }
+        await game.processDeathChain([game.lastWordsPlayer], PHASE.POST_VOTE);
       }
     }
   }
@@ -398,9 +427,9 @@ class PhaseManager {
   async start() {
     this.running = true;
 
-    // 外层循环：天数
+    // 外层循环：轮次
     while (this.running) {
-      getLogger().info(`========== 第 ${this.game.dayCount + 1} 天 ==========`);
+      getLogger().info(`========== 第 ${this.game.round} 轮 ==========`);
 
       // 内层循环：一天内的阶段流程
       for (const phase of PHASE_FLOW) {
@@ -413,8 +442,8 @@ class PhaseManager {
           getLogger().info(`狼人自爆中断，playerId=${playerId}`);
 
           // 如果当前不是公布死讯阶段，执行公布死讯
-          if (phase.id !== 'day_announce') {
-            const announcePhase = PHASE_FLOW.find(p => p.id === 'day_announce');
+          if (phase.id !== PHASE.DAY_ANNOUNCE) {
+            const announcePhase = PHASE_FLOW.find(p => p.id === PHASE.DAY_ANNOUNCE);
             if (announcePhase) await this._runPhase(announcePhase);
           }
 
@@ -433,8 +462,8 @@ class PhaseManager {
         if (this._checkGameEnd()) break;
       }
 
-      // 一天结束，天数+1
-      this.game.dayCount++;
+      // 一轮结束，轮次+1
+      this.game.round++;
     }
 
     getLogger().info('PhaseManager 停止');
@@ -455,11 +484,11 @@ class PhaseManager {
 
     // 通知前端阶段开始
     this.game.message.add({
-      type: 'phase_start',
-      content: phase.name,
+      type: MSG.PHASE_START,
       phase: phase.id,
       phaseName: phase.name,
-      visibility: 'public'
+      round: this.game.round,
+      visibility: VISIBILITY.PUBLIC
     });
 
     try {
@@ -477,13 +506,15 @@ class PhaseManager {
       this.game.winner = winner;
       getLogger().info(`游戏结束，胜者: ${winner}`);
       this.game.gameOverInfo = this.game.getGameOverInfo();
-      this.currentPhase = { id: 'game_over', name: '游戏结束' };
+      this.currentPhase = { id: PHASE.GAME_OVER, name: '游戏结束' };
       this.game.message.add({
-        type: 'game_over',
-        content: `游戏结束，${winner === 'good' ? '好人阵营' : winner === 'wolf' ? '狼人阵营' : '第三方阵营'}获胜`,
+        type: MSG.GAME_OVER,
+        content: buildMessage('GAME_OVER', {
+          结果: winner === CAMP.GOOD ? '好人阵营获胜' : winner === CAMP.WOLF ? '狼人阵营获胜' : '第三方阵营获胜'
+        }),
         winner: winner,
         gameOverInfo: this.game.gameOverInfo,
-        visibility: 'public'
+        visibility: VISIBILITY.PUBLIC
       });
       // 清除所有待处理请求，避免前端继续显示操作选项
       this.game.cancelAllPendingRequests();

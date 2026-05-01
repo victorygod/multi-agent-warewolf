@@ -2,6 +2,56 @@
  * 前端 UI 渲染 - WebSocket 版本
  */
 
+// 常量定义（与后端 constants.js 保持一致）
+const ACTION = {
+  GUARD: 'action_guard',
+  WITCH: 'action_witch',
+  SEER: 'action_seer',
+  CUPID: 'action_cupid',
+  SHOOT: 'action_shoot',
+  PASS_BADGE: 'action_passBadge',
+  ASSIGN_ORDER: 'action_assignOrder',
+  SHERIFF_CAMPAIGN: 'action_sheriff_campaign',
+  WITHDRAW: 'action_withdraw',
+  LAST_WORDS: 'action_last_words',
+  EXPLODE: 'action_explode',
+  DAY_DISCUSS: 'action_day_discuss',
+  NIGHT_WEREWOLF_DISCUSS: 'action_night_werewolf_discuss',
+  SHERIFF_SPEECH: 'action_sheriff_speech',
+  SHERIFF_VOTE: 'action_sheriff_vote',
+  DAY_VOTE: 'action_day_vote',
+  POST_VOTE: 'action_post_vote',
+  NIGHT_WEREWOLF_VOTE: 'action_night_werewolf_vote'
+};
+
+const CAMP = {
+  GOOD: 'good',
+  WOLF: 'wolf',
+  THIRD: 'third'
+};
+
+const VISIBILITY = {
+  PUBLIC: 'public',
+  SELF: 'self',
+  CAMP: 'camp',
+  COUPLE: 'couple',
+  COUPLE_IDENTITY: 'coupleIdentity',
+  CUPID_IDENTITY: 'cupidIdentity'
+};
+
+const MSG = {
+  PHASE_START: 'phase_start',
+  SPEECH: 'speech',
+  VOTE: 'vote',
+  ACTION: 'action',
+  SYSTEM: 'system',
+  DEATH_ANNOUNCE: 'death_announce',
+  WOLF_VOTE_RESULT: 'wolf_vote_result',
+  SHERIFF_CANDIDATES: 'sheriff_candidates',
+  GAME_OVER: 'game_over',
+  ACTION_REQUIRED: 'action_required'
+};
+
 // 角色名称
 const ROLE_NAMES = {
   werewolf: '狼人',
@@ -46,6 +96,7 @@ let currentAction = null;
 let presets = {};
 let selectedPresetId = null;
 let presetPanelOpen = false;
+let lockedPresetId = null; // 当前被锁定的板子ID（第一个玩家选的）
 
 // 服务器配置（从API获取）
 let SERVER_DEBUG_MODE = false;
@@ -86,6 +137,27 @@ async function init() {
   // 初始化 UI（确保 debug-role-group 等组件初始状态正确）
   updateUI();
 
+  // 在登录页面时轮询板子锁定状态（每2秒检查一次，加入游戏后停止）
+  window._presetPollTimer = setInterval(async () => {
+    if (elements.setupPanel.classList.contains('hidden')) {
+      clearInterval(window._presetPollTimer);
+      return;
+    }
+    try {
+      const res = await fetch('/api/presets');
+      const data = await res.json();
+      const newLockedId = data.currentPresetId || null;
+      if (newLockedId !== lockedPresetId) {
+        lockedPresetId = newLockedId;
+        if (lockedPresetId) {
+          selectedPresetId = lockedPresetId;
+          renderPresetList(lockedPresetId);
+          updateDebugRoleSelect(presets[lockedPresetId]?.roles);
+        }
+      }
+    } catch (e) { /* ignore */ }
+  }, 2000);
+
   // 检查 URL 是否有名字参数
   const urlParams = new URLSearchParams(window.location.search);
   const nameFromUrl = urlParams.get('name');
@@ -102,13 +174,18 @@ async function loadPresets() {
     const data = await res.json();
     SERVER_DEBUG_MODE = data.debugMode || false;
     presets = data.presets || {};
-    renderPresetList();
-    // 默认选中第一个板子并更新 debug-role-select
-    const firstPresetId = Object.keys(presets)[0];
-    if (firstPresetId) {
-      selectedPresetId = firstPresetId;
-      updateDebugRoleSelect(presets[firstPresetId]?.roles);
+    // 如果已有玩家选了板子，锁定为该板子；否则默认选中第一个
+    lockedPresetId = data.currentPresetId || null;
+    if (lockedPresetId) {
+      selectedPresetId = lockedPresetId;
+    } else {
+      const firstPresetId = Object.keys(presets)[0];
+      if (firstPresetId) {
+        selectedPresetId = firstPresetId;
+      }
     }
+    renderPresetList(lockedPresetId);
+    updateDebugRoleSelect(presets[selectedPresetId]?.roles);
     // 根据 debug 模式显示/隐藏 debug 组件
     const debugRoleGroup = document.getElementById('debug-role-group');
     if (debugRoleGroup && SERVER_DEBUG_MODE) {
@@ -122,12 +199,24 @@ async function loadPresets() {
 }
 
 // 渲染板子列表
-function renderPresetList() {
-  if (!elements.presetList) return;
+function renderPresetList(lockedPresetId = null) {
+  window.frontendLogger.info(`[renderPresetList] lockedPresetId=${lockedPresetId}, presets count=${Object.keys(presets).length}`);
+  if (!elements.presetList) {
+    window.frontendLogger.warn('[renderPresetList] elements.presetList is null');
+    return;
+  }
   elements.presetList.innerHTML = '';
   for (const [id, preset] of Object.entries(presets)) {
     const div = document.createElement('div');
-    div.className = 'preset-option' + (selectedPresetId === id ? ' selected' : '');
+    const isSelected = selectedPresetId === id;
+    const isLocked = lockedPresetId !== null;
+    const isLockedSelected = isLocked && id === lockedPresetId;
+
+    div.className = 'preset-option' + (isSelected || isLockedSelected ? ' selected' : '');
+    if (isLocked && !isLockedSelected) {
+      div.classList.add('disabled');
+    }
+    window.frontendLogger.info(`[renderPresetList] id=${id}, isSelected=${isSelected}, isLocked=${isLocked}, isLockedSelected=${isLockedSelected}, className=${div.className}`);
     div.dataset.presetId = id;
 
     const roleSummary = summarizeRoles(preset.roles);
@@ -140,8 +229,9 @@ function renderPresetList() {
       <div class="preset-rules">${rulesHtml}</div>
     `;
     div.addEventListener('click', () => {
+      if (isLocked && !isLockedSelected) return; // 锁定状态下不能选择其他板子
       selectedPresetId = id;
-      renderPresetList();
+      renderPresetList(lockedPresetId);
       updateDebugRoleSelect(presets[id]?.roles);
     });
     elements.presetList.appendChild(div);
@@ -174,15 +264,17 @@ function summarizeRoles(roles) {
 
 // 锁定板子显示
 function showPresetLocked(presetId) {
+  window.frontendLogger.info(`[showPresetLocked] presetId=${presetId}, presets=${Object.keys(presets)}`);
   const preset = presets[presetId];
-  if (!preset) return;
-  if (elements.presetList) elements.presetList.classList.add('hidden');
-  if (elements.presetLocked) {
-    elements.presetLocked.classList.remove('hidden');
-    const roleSummary = summarizeRoles(preset.roles);
-    const rulesHtml = (preset.ruleDescriptions || []).map(r => `<div class="preset-rule">· ${r}</div>`).join('');
-    elements.presetLockedName.innerHTML = `板子已锁定: <strong>${preset.name}</strong><div class="preset-roles" style="margin-top:6px">${roleSummary}</div>${rulesHtml}`;
+  if (!preset) {
+    window.frontendLogger.warn(`[showPresetLocked] 找不到 preset: ${presetId}`);
+    return;
   }
+  // 显示板子列表但禁用非选中的选项
+  if (elements.presetList) elements.presetList.classList.remove('hidden');
+  if (elements.presetLocked) elements.presetLocked.classList.add('hidden');
+  // 重新渲染列表，传入锁定的 presetId
+  renderPresetList(presetId);
 }
 
 // 自动加入
@@ -228,6 +320,9 @@ function renderPresetPanel(preset) {
 async function ready() {
   const name = elements.playerNameInput.value.trim() || `玩家${Date.now() % 1000}`;
   const presetId = selectedPresetId || '9-standard';
+
+  // 停止板子状态轮询
+  clearInterval(window._presetPollTimer);
 
   // 获取 Debug 模式选择的角色
   const debugRoleSelect = document.getElementById('debug-role-select');
@@ -283,24 +378,27 @@ function handleActionRequired(msg) {
   elements.skillButtons.innerHTML = '';
 
   switch (d.action) {
-    case 'speak':
-    case 'last_words':
+    case ACTION.LAST_WORDS:
+    case ACTION.DAY_DISCUSS:
+    case ACTION.NIGHT_WEREWOLF_DISCUSS:
+    case ACTION.SHERIFF_SPEECH:
       elements.actionInput.classList.add('active');
       elements.actionPrompt.textContent = '轮到你发言了';
       break;
 
-    case 'vote':
-    case 'wolf_vote':
-    case 'sheriff_vote':
+    case ACTION.DAY_VOTE:
+    case ACTION.POST_VOTE:
+    case ACTION.NIGHT_WEREWOLF_VOTE:
+    case ACTION.SHERIFF_VOTE:
       elements.voteButtons.classList.add('active');
-      elements.actionPrompt.textContent = d.action === 'wolf_vote' ? '请选择刀人目标' : (d.action === 'sheriff_vote' ? '请投票选警长' : '请投票');
+      elements.actionPrompt.textContent = d.action === ACTION.NIGHT_WEREWOLF_VOTE ? '请选择刀人目标' : (d.action === ACTION.SHERIFF_VOTE ? '请投票选警长' : '请投票');
       if (window.frontendLogger) {
         window.frontendLogger.debug(`[Vote] 可选目标: ${JSON.stringify(d.allowedTargets)}`);
       }
       renderVoteButtons(state, myPlayer, d.allowedTargets, d.action);
       break;
 
-    case 'guard':
+    case ACTION.GUARD:
       elements.skillButtons.classList.add('active');
       elements.actionPrompt.textContent = '请选择守护目标';
       // 守卫不能连守同一人，传入上一晚的目标
@@ -309,44 +407,43 @@ function handleActionRequired(msg) {
       renderTargetButtons(state, myPlayer, 1, { allowedTargets: d.allowedTargets, disabledIds: guardDisabledIds });
       break;
 
-    case 'witch':
+    case ACTION.WITCH:
       elements.skillButtons.classList.add('active');
       elements.actionPrompt.textContent = '女巫行动';
       renderWitchButtons(state, myPlayer, d);
       break;
 
-    case 'campaign':
+    case ACTION.SHERIFF_CAMPAIGN:
       elements.skillButtons.classList.add('active');
       elements.actionPrompt.textContent = '是否竞选警长？';
       renderCampaignButtons();
       break;
 
-    case 'withdraw':
+    case ACTION.WITHDRAW:
       elements.skillButtons.classList.add('active');
       elements.actionPrompt.textContent = '是否退水？';
       renderWithdrawButtons();
       break;
 
-    case 'choose_speaker_order':
-    case 'assignOrder':
+    case ACTION.ASSIGN_ORDER:
       elements.skillButtons.classList.add('active');
       elements.actionPrompt.textContent = '请指定发言顺序';
       renderSpeakerOrderUI(state);
       break;
 
-    case 'shoot':
+    case ACTION.SHOOT:
       elements.skillButtons.classList.add('active');
       elements.actionPrompt.textContent = '猎人请选择开枪目标';
       renderTargetButtons(state, myPlayer, 1);
       break;
 
-    case 'cupid':
+    case ACTION.CUPID:
       elements.skillButtons.classList.add('active');
       elements.actionPrompt.textContent = '请选择连接为情侣的两名玩家';
-      renderTargetButtons(state, myPlayer, 2);
+      renderTargetButtons(state, myPlayer, 2, { canSelectSelf: true });
       break;
 
-    case 'seer':
+    case ACTION.SEER:
       elements.skillButtons.classList.add('active');
       elements.actionPrompt.textContent = '请选择查验目标';
       // 从 state 计算 allowedTargets：排除自己、已查验的、死亡的
@@ -357,7 +454,7 @@ function handleActionRequired(msg) {
       renderTargetButtons(state, myPlayer, 1, { allowedTargets });
       break;
 
-    case 'passBadge':
+    case ACTION.PASS_BADGE:
       elements.skillButtons.classList.add('active');
       elements.actionPrompt.textContent = '警长请选择传警徽对象（或选择不传）';
       // 使用后端传来的 allowedTargets
@@ -382,22 +479,22 @@ function renderVoteButtons(state, myPlayer, allowedTargets, actionType) {
     : state.players.filter(p => p.alive && p.id !== myPlayer.id);
 
   // 判断是否是狼人投票，以及自己是不是狼人
-  const isWolfVote = actionType === 'wolf_vote';
+  const isWolfVote = actionType === ACTION.NIGHT_WEREWOLF_VOTE;
   // 优先从 state.self 获取，如果没有则从 players 数组中查找
   let myCamp = state.self?.role?.camp;
   if (!myCamp && myPlayer?.id) {
     const me = state.players.find(p => p.id === myPlayer.id);
     myCamp = me?.role?.camp;
   }
-  const isWolf = myCamp === 'wolf';
+  const isWolf = myCamp === CAMP.WOLF;
 
   candidates.forEach(player => {
-    const pos = controller.getPlayerPosition(player.id);
+    const pos = player.id;
     const btn = document.createElement('button');
     btn.className = 'vote-btn';
 
     // 狼人投票时，如果是狼人队友显示红色
-    const isTeammate = player.role?.camp === 'wolf';
+    const isTeammate = player.role?.camp === CAMP.WOLF;
     if (isWolfVote && isWolf && isTeammate) {
       btn.classList.add('wolf-target');
       btn.title = '狼人队友';
@@ -427,6 +524,7 @@ function renderTargetButtons(state, myPlayer, count = 1, extraData = {}) {
   const selected = [];
   const allowedTargets = extraData.allowedTargets;  // 后端指定的可选目标
   const disabledIds = extraData.disabledIds || [];
+  const canSelectSelf = extraData.canSelectSelf;  // 是否可以选择自己（如丘比特）
   const allButtons = [];  // 保存所有按钮引用
 
   // 如果有 allowedTargets，只显示这些玩家；否则显示所有其他存活玩家
@@ -434,11 +532,12 @@ function renderTargetButtons(state, myPlayer, count = 1, extraData = {}) {
   if (allowedTargets && allowedTargets.length > 0) {
     candidates = state.players.filter(p => allowedTargets.includes(p.id));
   } else {
-    candidates = state.players.filter(p => p.alive && p.id !== myPlayer.id);
+    // 如果 canSelectSelf 为 true，则允许选择自己
+    candidates = state.players.filter(p => p.alive && (canSelectSelf || p.id !== myPlayer.id));
   }
 
   candidates.forEach(player => {
-    const pos = controller.getPlayerPosition(player.id);
+    const pos = player.id;
     const btn = document.createElement('button');
     btn.className = 'skill-btn';
     btn.textContent = `${pos}号 ${player.name}`;
@@ -536,7 +635,7 @@ function renderTargetButtons(state, myPlayer, count = 1, extraData = {}) {
 function renderPassBadgeButtons(alivePlayers) {
   // 添加传警徽按钮
   alivePlayers.forEach(player => {
-    const pos = controller.getPlayerPosition(player.id);
+    const pos = player.id;
     const btn = document.createElement('button');
     btn.className = 'skill-btn';
     btn.textContent = `传警徽给 ${pos}号 ${player.name}`;
@@ -569,7 +668,7 @@ function renderWitchButtons(state, myPlayer, d) {
     // 检查是否可以自救（仅首夜可以自救）
     const canSelfHeal = d.canSelfHeal !== false;
 
-    const targetPos = controller.getPlayerPosition(d.werewolfTarget);
+    const targetPos = d.werewolfTarget;
     if (isSelfTargeted && !canSelfHeal) {
       elements.actionPrompt.innerHTML = `<strong>今晚 ${targetPos}号${target?.name || '某人'} 被狼人杀害！（非首夜不能自救）</strong>`;
     } else {
@@ -608,7 +707,7 @@ function renderWitchButtons(state, myPlayer, d) {
     poisonSection.innerHTML = '<span>💀 毒药：</span>';
 
     state.players.filter(p => p.alive && p.id !== myPlayer.id && p.id !== d.werewolfTarget).forEach(player => {
-      const pos = controller.getPlayerPosition(player.id);
+      const pos = player.id;
       const btn = document.createElement('button');
       btn.className = 'skill-btn poison';
       btn.textContent = `${pos}号 ${player.name}`;
@@ -687,7 +786,7 @@ function renderSpeakerOrderUI(state) {
   }
 
   alivePlayers.forEach(player => {
-    const pos = controller.getPlayerPosition(player.id);
+    const pos = player.id;
     const btn = document.createElement('button');
     btn.className = 'skill-btn';
     btn.textContent = `${pos}号 ${player.name}`;
@@ -757,8 +856,16 @@ function updateUI(state) {
     state = controller.getState();
   }
   if (!state) {
+    window.frontendLogger.warn('[updateUI] state is null, return');
     return;
   }
+
+  // 游戏结束时清除当前行动，确保能显示结算页面
+  if (state.phase === 'game_over' && currentAction) {
+    clearActionUI();
+  }
+
+  window.frontendLogger.info(`[updateUI] presetLocked=${state.presetLocked}, presetId=${state.presetId}, phase=${state.phase}`);
 
   // Debug 模式：根据板子角色更新选项（debug组件显示已在loadPresets中处理）
   if (SERVER_DEBUG_MODE && state.boardRoles) {
@@ -769,8 +876,9 @@ function updateUI(state) {
   updatePlayers(state);
   updateMessages();
 
-  // 如果没有行动请求，更新默认操作区
-  if (!currentAction) {
+  // 如果没有行动请求，且 state 中也没有待处理的行动请求，才更新默认操作区
+  // 注意：state.pendingAction 可能在 updateUI 之后才被处理（通过 onActionRequired）
+  if (!currentAction && !state.pendingAction) {
     updateDefaultAction(state);
   }
 }
@@ -802,7 +910,9 @@ function updateHeader(state) {
     const total = state.playerCount || state.preset?.playerCount || 9;
     phaseText = `等待玩家加入 (${current}/${total})`;
     // 板子锁定：禁用选择器
+    window.frontendLogger.info(`[updateHeader] phase=${state.phase}, presetLocked=${state.presetLocked}, presetId=${state.presetId}, players=${state.players?.length}`);
     if (state.presetLocked && state.presetId) {
+      window.frontendLogger.info(`[updateHeader] 调用 showPresetLocked, presetId=${state.presetId}`);
       showPresetLocked(state.presetId);
     }
   }
@@ -826,13 +936,13 @@ function updateHeader(state) {
 
     // 显示情侣信息
     if (state.self?.isCouple && state.self?.couplePartner) {
-      const partnerPos = controller.getPlayerPosition(state.self.couplePartner);
+      const partnerPos = state.self.couplePartner;
       roleHtml += ` <span class="couple-info">情侣: ${partnerPos}号</span>`;
     }
 
-    if (myPlayer.role.camp === 'wolf' || myPlayer.role === 'werewolf') {
+    if (myPlayer.role.camp === CAMP.WOLF || myPlayer.role.id === 'werewolf') {
       const teammates = state.players
-        .filter(p => (p.role?.camp === 'wolf' || p.role === 'werewolf') && p.id !== myPlayer.id)
+        .filter(p => (p.role?.camp === CAMP.WOLF || p.role?.id === 'werewolf') && p.id !== myPlayer.id)
         .map(p => p.name);
       if (teammates.length > 0) {
         roleHtml += ` <span class="teammates">队友: ${teammates.join(', ')}</span>`;
@@ -875,7 +985,7 @@ function updatePlayers(state) {
       const roleId = player.role.id || player.role;
       if (myPlayer && player.id === myPlayer.id) {
         roleText = ROLE_NAMES[roleId] || '';
-      } else if (myPlayer && (myPlayer.role.camp === 'wolf' || myPlayer.role === 'werewolf') && (player.role.camp === 'wolf' || player.role === 'werewolf')) {
+      } else if (myPlayer && (myPlayer.role.camp === CAMP.WOLF || myPlayer.role === 'werewolf') && (player.role.camp === CAMP.WOLF || player.role === 'werewolf')) {
         roleText = ROLE_NAMES[roleId] || '';
       }
       if (state.phase === 'game_over') {
@@ -935,7 +1045,7 @@ function displayMessage(msg, state) {
   if (msg.type === 'phase_start') {
     addPhaseDivider(msg.phaseName || msg.content || msg.phase, msg.id);
   } else if (msg.type === 'speech' || msg.type === 'wolf_speech' || msg.type === 'last_words') {
-    const pos = controller.getPlayerPosition(msg.playerId);
+    const pos = msg.playerId;
     const prefix = msg.type === 'last_words' ? '【遗言】' : '';
     const className = msg.type === 'wolf_speech' ? 'wolf-channel' : (msg.type === 'last_words' ? 'last-words' : '');
     addMessage(`${prefix}${pos}号${msg.playerName}：${msg.content}`, className, msg.id);
@@ -956,7 +1066,7 @@ function displayMessage(msg, state) {
     if (msg.voteCounts) {
       content += '<div class="vote-counts">';
       for (const [playerId, count] of Object.entries(msg.voteCounts)) {
-        const pos = controller.getPlayerPosition(Number(playerId));
+        const pos = Number(playerId);
         const player = state?.players?.find(p => p.id === Number(playerId));
         content += `<div>${pos}号${player?.name || ''}: ${count}票</div>`;
       }
@@ -974,40 +1084,17 @@ function displayMessage(msg, state) {
     if (window.frontendLogger) {
       window.frontendLogger.info(`[Death] msg: ${JSON.stringify(msg)}`);
     }
-    // 显示死亡消息
+    // 显示死亡消息（不显示死亡原因）
     let content = '<div class="death-announce">';
     msg.deaths.forEach(d => {
-      const pos = controller.getPlayerPosition(d.id);
-      let reasonText = '';
-      switch (d.reason) {
-        case 'wolf':
-          reasonText = '被狼人击杀';
-          break;
-        case 'poison':
-          reasonText = '被毒杀';
-          break;
-        case 'conflict':
-          reasonText = '同守同救';
-          break;
-        case 'vote':
-          reasonText = '被放逐';
-          break;
-        case 'hunter':
-          reasonText = '被猎人带走';
-          break;
-        case 'couple':
-          reasonText = '殉情';
-          break;
-        default:
-          reasonText = '死亡';
-      }
-      content += `<div>${pos}号${d.name} ${reasonText}</div>`;
+      const pos = d.id;
+      content += `<div>${pos}号${d.name} 死亡</div>`;
     });
     content += '</div>';
     addMessage(content, 'system death', msg.id);
-  } else if (msg.type === 'action' || msg.type === 'system') {
+  } else if (msg.type === MSG.ACTION || msg.type === MSG.SYSTEM) {
     // 私有消息（visibility: 'self'）显示给玩家自己
-    if (msg.visibility === 'self') {
+    if (msg.visibility === VISIBILITY.SELF) {
       addMessage(`[私密] ${msg.content}`, 'private', msg.id);
     } else {
       addMessage(msg.content, msg.className || msg.type, msg.id);
@@ -1023,10 +1110,14 @@ function addMessage(content, className = '', id = null) {
   if (id && document.querySelector(`[data-msg-id="${id}"]`)) {
     return;
   }
+  // 解析消息中的标签
+  const parsedContent = window.MessageParser
+    ? window.MessageParser.parseMessageContent(content)
+    : content;
   const msg = document.createElement('div');
   msg.className = `message ${className}`;
   if (id) msg.dataset.msgId = id;
-  msg.innerHTML = `<div class="message-content">${content.replace(/\n/g, '<br>')}</div>`;
+  msg.innerHTML = `<div class="message-content">${parsedContent.replace(/\n/g, '<br>')}</div>`;
   elements.messages.appendChild(msg);
   elements.messages.scrollTop = elements.messages.scrollHeight;
 }
@@ -1076,18 +1167,28 @@ function updateDefaultAction(state) {
   if (state.phase === 'game_over') {
     let winnerText = '';
     switch (state.winner) {
-      case 'wolf':
+      case CAMP.WOLF:
         winnerText = '狼人阵营获胜！';
         break;
-      case 'good':
+      case CAMP.GOOD:
         winnerText = '好人阵营获胜！';
         break;
-      case 'third':
+      case CAMP.THIRD:
         winnerText = '第三方（情侣）获胜！';
         break;
       default:
         winnerText = '游戏结束';
     }
+
+    // 死亡原因映射
+    const DEATH_REASONS = {
+      wolf: '被狼人击杀',
+      poison: '被女巫毒杀',
+      conflict: '同守同救',
+      vote: '被放逐',
+      hunter: '被猎人带走',
+      couple: '殉情'
+    };
 
     // 显示获胜信息和所有玩家身份
     let gameOverHtml = `<div class="game-over"><strong>${winnerText}</strong>`;
@@ -1097,7 +1198,7 @@ function updateDefaultAction(state) {
         // 使用后端传来的 display，fallback 用索引计算位置
         const display = p.display || `${idx + 1}号${p.name}`;
         const roleName = p.role ? ROLE_NAMES[p.role.id] || p.role.id : '未知';
-        const deathInfo = p.alive ? '存活' : (p.deathReason ? `死亡(${p.deathReason})` : '死亡');
+        const deathInfo = p.alive ? '存活' : (p.deathReason ? `死亡(${DEATH_REASONS[p.deathReason] || p.deathReason})` : '死亡');
         const sheriffMark = p.isSheriff ? ' 🏅警长' : '';
         const coupleMark = p.isCouple ? ' 💕情侣' : '';
         gameOverHtml += `<div>${display}: ${roleName} - ${deathInfo}${sheriffMark}${coupleMark}</div>`;

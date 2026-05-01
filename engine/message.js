@@ -3,37 +3,38 @@
  */
 
 const { EventEmitter } = require('./event');
+const { MSG, VISIBILITY } = require('./constants');
 
 // 可见性规则
 const VisibilityRules = {
   // 公开消息：所有人都可见
-  public: (player, msg, game) => true,
+  [VISIBILITY.PUBLIC]: (player, msg, game) => true,
 
   // 私人消息：只有发送者可见
-  self: (player, msg, game) => msg.playerId === player.id,
+  [VISIBILITY.SELF]: (player, msg, game) => msg.playerId === player.id,
 
   // 阵营消息：同阵营可见
-  camp: (player, msg, game) => {
+  [VISIBILITY.CAMP]: (player, msg, game) => {
     const sender = game.players.find(p => p.id === msg.playerId);
     if (!sender) return false;
     return game.config.hooks?.getCamp(player, game) === game.config.hooks?.getCamp(sender, game);
   },
 
   // 情侣消息：只有情侣可见（可见情侣身份，角色身份不可见）
-  couple: (player, msg, game) => {
+  [VISIBILITY.COUPLE]: (player, msg, game) => {
     return game.couples?.includes(player.id);
   },
 
   // 情侣可见对方情侣身份（仅可见情侣身份，角色身份不可见）
   // 用于情侣之间互相知道对方是情侣，但不知道对方角色
-  coupleIdentity: (player, msg, game) => {
+  [VISIBILITY.COUPLE_IDENTITY]: (player, msg, game) => {
     // 发送者是情侣，且接收者也是情侣
     if (!msg.playerId || !game.couples?.includes(msg.playerId)) return false;
     return game.couples?.includes(player.id);
   },
 
   // 丘比特可见所有情侣身份（仅可见情侣身份，角色身份不可见）
-  cupidIdentity: (player, msg, game) => {
+  [VISIBILITY.CUPID_IDENTITY]: (player, msg, game) => {
     // 发送者是丘比特
     const sender = game.players.find(p => p.id === msg.playerId);
     if (!sender || sender.role?.id !== 'cupid') return false;
@@ -50,7 +51,9 @@ class MessageManager extends EventEmitter {
   }
 
   // 添加消息
-  add({ type, content, playerId, playerName, visibility = 'public', metadata = {}, voteDetails, voteCounts, phase, phaseName, deaths }) {
+  add({ type, content, playerId, playerName, visibility = VISIBILITY.PUBLIC, metadata = {}, voteDetails, voteCounts, phase, phaseName, deaths, round }) {
+    // 死亡消息不暴露死亡原因（原因只在游戏结束时公布）
+    const safeDeaths = deaths?.map(d => ({ id: d.id, name: d.name }));
     const msg = {
       id: this._nextId++,
       type,        // speech/vote/action/system/death/phase_start
@@ -63,7 +66,8 @@ class MessageManager extends EventEmitter {
       voteCounts,  // 投票计数（用于显示各候选人票数）
       phase,       // 阶段ID（用于 phase_start 消息）
       phaseName,   // 阶段名称
-      deaths,      // 死亡玩家数组（用于 death_announce 消息）
+      round,       // 当前轮次（由 engine 写入，第N夜/第N天共用）
+      deaths: safeDeaths,  // 死亡玩家数组（不含死亡原因）
       timestamp: Date.now()
     };
     this.messages.push(msg);

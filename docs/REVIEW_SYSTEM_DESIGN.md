@@ -129,8 +129,6 @@ public/
 #### 复盘提示词内容
 
 ```
-你是狼人杀游戏分析师。请分析本局游戏中你的表现，并给出策略改进建议。
-
 ## 游戏结果
 - 获胜阵营：狼人阵营
 - 游戏天数：4天
@@ -147,18 +145,25 @@ public/
 ...
 
 ## 复盘要求
-请分析以下内容：
-1. 你在本局游戏中的决策是否正确？
-2. 你的发言、投票、验人策略有哪些可以改进的地方？
-3. 根据本局游戏的具体情况，角色攻略文档中应该补充或修改哪些内容？
+请根据本局游戏的具体情况，提炼一条100字以内的策略补丁，追加到角色攻略文档末尾。
+
+要求：
+1. 简洁：一句话说清楚，只有一句话
+2. 与攻略风格一致：参考现有策略文档的简洁条目式风格
+3. 实用：针对本局具体问题给出可操作的建议
 
 请以JSON格式返回：
+```json
 {
-  "analysis": "你的分析（200字以内）",
-  "improvements": [
-    {"category": "分类", "content": "具体改进建议"}
-  ]
+  "type": "review",
+  "content": "你的策略补丁（100字以内，一句话）"
 }
+```
+
+示例：
+- 预言家: "被悍跳时先分析对跳者发言逻辑再决定是否退水"
+- 女巫: "首夜自救后，第二夜优先救预言家确保信息源存活"
+- 狼人: "人狼恋情况下引导队友刀好人而非刀情侣"
 ```
 
 #### 关键点
@@ -262,9 +267,9 @@ async function reviewPlayer(player, game, gameOverInfo) {
     const result = parseReviewResponse(response);
 
     if (result.success) {
-      // 将改进建议追加到策略文档
-      await appendToStrategyGuide(presetId, roleId, result.improvements);
-      getLogger().info(`复盘成功：${player.name}，已更新策略文档`);
+      // 将策略补丁追加到策略文档
+      await appendToStrategyGuide(presetId, roleId, result.content);
+      getLogger().info(`复盘成功：${player.name}，已更新策略文档: ${result.content}`);
     }
 
     return { playerId, roleId, ...result };
@@ -319,18 +324,39 @@ function buildReviewPrompt(player, game, gameOverInfo) {
 ${formatGameOverInfo(gameOverInfo)}
 
 ## 复盘要求
-请分析以下内容：
-1. 你在本局游戏中的决策是否正确？
-2. 你的发言、投票、验人策略有哪些可以改进的地方？
-3. 根据本局游戏的具体情况，角色攻略文档中应该补充或修改哪些内容？
+请根据本局游戏的具体情况，提炼一条100字以内的策略补丁，追加到角色攻略文档末尾。
+
+要求：
+1. 简洁：一句话说清楚，只有一句话
+2. 与攻略风格一致：参考现有策略文档的简洁条目式风格
+3. 实用：针对本局具体问题给出可操作的建议
 
 请以JSON格式返回：
+```json
 {
-  "analysis": "你的分析（200字以内）",
-  "improvements": [
-    {"category": "分类", "content": "具体改进建议"}
-  ]
-}`;
+  "type": "review",
+  "content": "你的策略补丁（100字以内，一句话）"
+}
+```
+
+示例：
+- 预言家: "被悍跳时先分析对跳者发言逻辑再决定是否退水，避免过早暴露身份"
+- 女巫: "首夜自救后，第二夜优先救预言家而非自己，确保信息源存活"
+- 狼人: "人狼恋情况下引导队友刀好人而非刀情侣，保护第三方胜利条件"
+`;
+
+  // 替换 lastMessages 中的 user 消息为复盘提示词
+  const reviewLastMessages = [
+    { role: 'system', content: `${systemPrompt}\n\n${historyText}` },
+    { role: 'user', content: reviewPrompt }
+  ];
+
+  return {
+    systemPrompt,
+    historyText,
+    phasePrompt: reviewPrompt,
+    lastMessages: reviewLastMessages
+  };
 }
 
 /**
@@ -351,6 +377,7 @@ function formatGameOverInfo(gameOverInfo) {
 
 /**
  * 解析复盘响应
+ * 期望格式: { "type": "review", "content": "策略补丁内容" }
  */
 function parseReviewResponse(response) {
   try {
@@ -361,10 +388,15 @@ function parseReviewResponse(response) {
     }
 
     const result = JSON.parse(jsonMatch[0]);
+
+    // 验证格式
+    if (result.type !== 'review' || !result.content) {
+      return { success: false, error: '格式错误，需要 type=review 和 content 字段' };
+    }
+
     return {
       success: true,
-      analysis: result.analysis,
-      improvements: result.improvements || []
+      content: result.content
     };
   } catch (error) {
     return { success: false, error: error.message };
@@ -372,10 +404,11 @@ function parseReviewResponse(response) {
 }
 
 /**
- * 追加改进建议到策略文档
+ * 追加策略补丁到策略文档
+ * 格式：直接在文档末尾加分割线，然后是一句话
  */
-async function appendToStrategyGuide(presetId, roleId, improvements) {
-  if (!improvements || improvements.length === 0) return;
+async function appendToStrategyGuide(presetId, roleId, patchContent) {
+  if (!patchContent) return;
 
   const strategyPath = path.join(__dirname, '..', 'ai', 'strategy', presetId, `${roleId}.md`);
 
@@ -385,18 +418,15 @@ async function appendToStrategyGuide(presetId, roleId, improvements) {
   }
 
   // 读取现有内容
-  let content = fs.readFileSync(strategyPath, 'utf-8');
+  let fileContent = fs.readFileSync(strategyPath, 'utf-8');
 
-  // 添加复盘建议
-  const timestamp = new Date().toISOString().slice(0, 10);
-  const newSection = `\n\n---\n\n## 复盘建议 (${timestamp})\n\n`;
+  // 添加策略补丁（简洁格式：分割线 + 一句话）
+  const newSection = `\n\n---\n\n${patchContent}`;
 
-  const improvementLines = improvements.map(i => `- **${i.category}**: ${i.content}`).join('\n');
-
-  content += newSection + improvementLines;
+  fileContent += newSection;
 
   // 写回文件
-  fs.writeFileSync(strategyPath, content, 'utf-8');
+  fs.writeFileSync(strategyPath, fileContent, 'utf-8');
 }
 
 module.exports = { runReview };
@@ -583,95 +613,25 @@ game.on('review:complete', (data) => {
 
 ### 4.1 更新格式
 
-复盘建议追加到策略文档末尾，格式如下：
+复盘建议直接追加到策略文档末尾，格式简洁：
 
 ```markdown
 ---
 
-## 复盘建议 (2024-04-21)
-
-- **发言策略**: 在被查杀后应该更加激进地反驳，而不是简单表水
-- **投票策略**: 第3天应该投票给5号而不是3号，当时5号发言更可疑
-- **攻略更新**: 预言家在被悍跳时应该先分析对跳者的发言逻辑再决定是否退水
+被悍跳时先分析对跳者发言逻辑再决定是否退水
 ```
 
-### 4.2 更新限制
-
-为了避免策略文档无限增长，建议：
-1. 每个角色最多保留最近 10 条复盘建议
-2. 定期清理过时的复盘建议（如超过 30 天）
-3. 可以添加一个「重要更新」标记，标记关键策略变更
+追加后策略文档变成：
+```markdown
+## 策略要点
+1. 首夜验人优先级：...
 
 ---
 
-## 五、错误处理
-
-### 5.1 LLM 调用失败
-
-如果某个角色的复盘失败：
-- 记录错误日志
-- 继续处理其他角色
-- 不阻塞整体流程
-
-### 5.2 文件写入失败
-
-如果策略文档写入失败：
-- 回滚文件内容
-- 记录错误日志
-- 跳过该角色的更新
-
-### 5.3 前端断连
-
-如果前端在复盘过程中断连：
-- 继续在后台执行复盘
-- 复盘完成后记录在日志中
-- 下次连接时显示复盘状态
-
----
-
-## 六、配置项
-
-### 6.1 新增配置
-
-在 `api_key.conf` 或游戏配置中可以添加：
-
-```json
-{
-  "review_enabled": true,
-  "review_parallel": true,
-  "review_timeout": 30000,
-  "max_improvements_per_role": 10
-}
+被悍跳时先分析对跳者发言逻辑再决定是否退水
 ```
 
-### 6.2 配置说明
 
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| review_enabled | 是否启用复盘功能 | true |
-| review_parallel | 是否并行执行复盘 | true |
-| review_timeout | 单个角色复盘超时时间(ms) | 30000 |
-| max_improvements_per_role | 每个角色最大保留建议数 | 10 |
-
----
-
-## 七、测试计划
-
-### 7.1 单元测试
-- 测试复盘提示词构建
-- 测试策略文档追加
-- 测试错误处理
-
-### 7.2 集成测试
-- 测试完整复盘流程
-- 测试并行执行
-- 测试前端交互
-
-### 7.3 压力测试
-- 12 人局全部 LLM 角色复盘
-- 验证复盘完成时间
-
----
 
 ## 八、注意事项
 
@@ -679,4 +639,3 @@ game.on('review:complete', (data) => {
 2. **并行执行**: 所有 LLM 角色的复盘应并行执行，减少等待时间
 3. **前端阻塞**: 「再开一局」按钮必须等待所有复盘完成后才能点击
 4. **日志记录**: 所有复盘操作都需要记录日志，便于调试
-5. **策略备份**: 建议定期备份策略文档，防止误操作导致内容丢失

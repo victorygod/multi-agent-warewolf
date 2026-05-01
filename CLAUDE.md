@@ -58,85 +58,70 @@ For multi-step tasks, state a brief plan:
 3. [Step] → verify: [check]
 ```
 
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
----
-
-## Project Overview
-
-A **Werewolf (狼人杀) game** with a configurable rule engine, AI players, web frontend, and WebSocket server.
-
 ## Commands
 
 ```bash
-npm start                 # Start server at http://localhost:3000
-node test/*.js            # Run all test files
-node server.js --debug    # Enable debug mode (allows role selection)
+npm start                    # Start server at http://localhost:3000
+npm run dev                  # Start with --watch (auto-restart on changes)
+node server.js --debug       # Enable debug mode (allows role selection)
+
+node test/helpers/test-runner.js                           # Run all tests
+node test/helpers/test-runner.js --dir test/unit            # Unit tests only
+node test/helpers/test-runner.js --dir test/integration     # Integration tests only
+node test/helpers/test-runner.js --file test/unit/engine/phase.test.js  # Single file
+node test/helpers/test-runner.js --grep "角色"              # Pattern match
+
+node cli_client.js           # CLI client for manual game simulation
 ```
-
-## CLI Client (Simulation Testing)
-
-`cli_client.js` allows simulating a human player via command line for testing
 
 ## Architecture
 
-**Config-Driven Design**: Business rules in `config.js` and `roles.js`, not in engine code.
+### Game Flow
 
-- **GameEngine** (`engine/main.js`): Pure state driver with low-level APIs (`callSpeech`, `callVote`, `callSkill`, `handleDeath`)
-- **PhaseManager** (`engine/phase.js`): Executes game flow via `PHASE_FLOW` array
-- **config.js**: ALL business rules—roles, camps, win conditions, hooks (`getCamp`, `getVoteWeight`, `hasLastWords`, `ACTION_FILTERS`)
-- **roles.js**: Role definitions with skills, constraints, event listeners
+`server.js` → `ServerCore` → `GameEngine` → `PhaseManager` → `PHASE_FLOW`
 
-**Data Flow**: `Phase → GameEngine → PlayerController → AIController/HumanController → MessageManager → Client`
+1. **ServerCore** (`server-core.js`): WebSocket server, player connection management, message routing. Override hooks (`createAIManager`, `createAI`, `shouldAutoStart`) for test injection.
+2. **GameEngine** (`engine/main.js`): Game state, player actions API (`callSpeech`, `callVote`, `callSkill`), death chain processing, role assignment. Does NOT drive game flow — that's PhaseManager's job.
+3. **PhaseManager** (`engine/phase.js`): Drives game via `PHASE_FLOW` array. Each phase has `id`, `name`, optional `condition`, and `execute(game)`. Loop: outer = rounds, inner = phases per round.
+4. **PlayerController** (`engine/player.js`): Base class with shared skill execution logic. `HumanController` subclass uses `requestAction` (WebSocket). `AIController` (in `ai/controller.js`) uses the Agent system.
 
-**Key Patterns**:
-- AI and human controllers have identical method signatures (`getSpeechResult`, `getVoteResult`, `useSkill`)
-- Roles subscribe to events (`player:death`, `player:vote`) via `events` property; return `{ cancel: true }` to cancel
-- Human players use `game.requestAction()` for WebSocket-based interaction
+### Key Design Patterns
 
-**Skill Types**: `target` (single), `double_target` (two), `choice` (multi-choice), `instant` (immediate)
+- **Phase calls Engine API, Engine calls Controller**: Phase flow calls `game.callSkill()`, `game.callVote()`, `game.callSpeech()`. Engine resolves to `PlayerController` (AI or Human) which handles the actual decision.
+- **Tool-based AI decisions**: AI Agent (`ai/agent/agent.js`) uses LLM function calling. Each ACTION type has a corresponding tool in `ai/agent/tools.js` with `buildSchema` and `execute`. Agent loop: LLM call → tool call → execute → append to history.
+- **Message visibility**: `MessageManager` (`engine/message.js`) stores all messages. Each message has `visibility` (PUBLIC/SELF/CAMP/COUPLE). `getVisibleTo(player, game)` filters using `VisibilityRules`.
+- **Config-driven rules**: `engine/config.js` defines `BOARD_PRESETS` (role compositions, rule overrides, win conditions), `HOOKS` (getCamp, hasLastWords, checkWin), and `ACTION_FILTERS` (target validation). `getEffectiveRules(preset)` merges preset rules over defaults.
+- **Role system**: `engine/roles.js` defines roles with `skills` (target/double_target/choice/instant types) and `events` (player:death). `ATTACHMENTS` defines sheriff and couple as overlay identities.
 
-## Phase Flow
+### AI Agent Pipeline
 
-**First Night**: cupid → guard → werewolf_discuss/vote → witch → seer → hunter_night
-**Other Nights**: guard → werewolf_discuss/vote → witch → seer → hunter_night
-**First Day**: sheriff_campaign → sheriff_speech → sheriff_vote → day_announce → day_discuss → day_vote → post_vote
-**Other Days**: day_announce → day_discuss → day_vote → post_vote
+`AIController.buildContext()` → `Agent.enqueue()` → `Agent.answer()` → model fallback chain (MockModel → LLMModel → RandomModel) → `_agentLoop()` with tool calling → result back to Controller.
 
-## AI Configuration
+- `ai/agent/prompt.js`: System prompt construction, per-action task prompts, AI profile loading from `ai/profiles/`
+- `ai/agent/message_manager.js`: Per-player message history with LLM context compression
+- `ai/agent/formatter.js`: Formats game messages into LLM-consumable text
+- `ai/agent/tools.js`: Tool registry with `registerTool`, `getTool`, `getToolsForAction`
 
-Create `api_key.conf` for LLM-based AI:
-```json
-{ "base_url": "https://api.example.com/v1", "auth_token": "your-token", "model": "model-name" }
-```
-Without this file, AI uses `RandomAgent` (random decisions).
+### Constants
+
+All enums in `engine/constants.js`: `PHASE`, `ACTION`, `MSG`, `VISIBILITY`, `CAMP`, `ROLE_TYPE`, `DEATH_REASON`, `MSG_TEMPLATE`. Action IDs use `action_` prefix (e.g., `action_guard`) to distinguish from phase IDs.
 
 ## Testing
 
-Tests use `MockAgent` for deterministic behavior:
-```javascript
-const { game, aiControllers } = createTestGame(9);
-setAI(aiControllers, playerId, 'vote', targetId);
-await game.phaseManager.executePhase('day_vote');
-```
+Custom test framework in `test/helpers/test-runner.js` (describe/it/beforeEach/afterEach). No external test libraries.
 
-## Key Files
+- **Unit tests** (`test/unit/`): Use `game-harness.js` which creates `GameEngine` + mock `AIManager` with `MockModel`. Tests run <1s.
+- **Integration tests** (`test/integration/`): Use `server-harness.js` which starts real WebSocket server. ~23s.
+- **MockModel** (`test/helpers/mock-model.js`): Deterministic AI responses. Configure via `presetResponses` (static) and `customStrategies` (functions receiving context).
+- **Timeout = bug**: MockModel responds in <10ms. If tests timeout, the logic is stuck — never increase timeout.
+- **setForcedRole**: When forcing a human role, swaps with AI to avoid duplication.
+- **Log isolation**: Each test file gets its own log via `setTestLogPath`/`resetTestLogPath`. Normal runs write to `logs/backend.log`.
 
-| File | Purpose |
-|------|---------|
-| `server.js` | Express + WebSocket entry |
-| `engine/main.js` | GameEngine (state driver) |
-| `engine/phase.js` | PhaseManager + PHASE_FLOW |
-| `engine/config.js` | Business rules |
-| `engine/roles.js` | Role definitions |
-| `engine/player.js` | PlayerController + HumanController |
-| `ai/controller.js` | AIController (LLM/Random/Mock) |
-| `test/*.js` | 70+ test cases |
+## Important Conventions
 
-## Mention
-
-1. 总是保证每个测试用例都能跑通
-2. 文档不要有大段代码，用自然语言或伪代码描述逻辑
-3. 正式代码里的日志都要靠utils/logger.js来输出，禁止console.log
-4. 用cli_client.js玩的时候，多看看后端日志和后端代码，时刻留心什么不合理的地方，记录文档并自己分析代码看看是否需要修复
-5. 创建AI,0.001s就能创建完
+- No comments in production code (不要在代码里加注释)
+- All logging must go through `utils/logger.js` (`createLogger`). Never use `console.log` in production code.
+- AI creation is near-instant (0.001s) — no async init needed.
+- `api_key.conf` (gitignored) provides LLM config. Without it, AI falls back to `RandomModel`.
+- Docs should use natural language or pseudocode, not large code blocks.
+- Every test must pass. If a test breaks, fix the code, not the test.

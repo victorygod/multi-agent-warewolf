@@ -11,17 +11,10 @@ function shuffle(array) {
   return array;
 }
 
-// 通过玩家ID获取位置号（1-based）
-function getPosition(players, playerId) {
-  const index = players.findIndex(p => p.id === playerId);
-  return index >= 0 ? index + 1 : playerId;
-}
-
-// 获取玩家显示名称（带位置编号）
+// 获取玩家显示名称（带位置编号，ID = 位置编号）
 function getPlayerDisplay(players, player) {
   if (!player) return '未知';
-  const pos = getPosition(players, player.id);
-  return `${pos}号${player.name}`;
+  return `${player.id}号${player.name}`;
 }
 
 // ========== 发言顺序计算 ==========
@@ -110,8 +103,8 @@ function calculateDefaultSpeakerOrder(players, lastDeathPlayer, canSpeak) {
     }
   }
 
-  // 无警长且平安夜：从1号座位开始顺时针（players数组顺序就是座位顺序）
-  return alivePlayers;
+  // 无警长且平安夜：从1号座位开始顺时针
+  return alivePlayers.sort((a, b) => a.id - b.id);
 }
 
 module.exports = {
@@ -119,7 +112,6 @@ module.exports = {
   shuffle,
 
   // 玩家显示
-  getPosition,
   getPlayerDisplay,
 
   // 发言顺序

@@ -1,6 +1,6 @@
 /**
  * 日志模块
- * 每次服务器启动时清空日志目录
+ * 支持测试注入：通过 setTestLogPath 将所有日志重定向到指定文件
  *
  * 日志级别说明：
  * - INFO: 玩家行为（发言、投票、技能使用）、阶段变更
@@ -13,22 +13,28 @@
 const fs = require('fs');
 const path = require('path');
 
-// 项目根目录
 const PROJECT_ROOT = path.resolve(__dirname, '..');
-
-// logs 目录路径
 const LOGS_DIR = path.join(PROJECT_ROOT, 'logs');
 
-// DEBUG 模式通过 global.DEBUG_MODE 动态获取（由 server.js --debug 设置）
+let _testLogPath = null;
 
-// 确保 logs 目录存在
+function setTestLogPath(filepath) {
+  _testLogPath = filepath;
+  if (filepath) {
+    fs.mkdirSync(path.dirname(filepath), { recursive: true });
+  }
+}
+
+function resetTestLogPath() {
+  _testLogPath = null;
+}
+
 function ensureLogsDir() {
   if (!fs.existsSync(LOGS_DIR)) {
     fs.mkdirSync(LOGS_DIR, { recursive: true });
   }
 }
 
-// 清空日志目录
 function clearLogs() {
   ensureLogsDir();
   fs.readdirSync(LOGS_DIR).forEach(file => {
@@ -38,51 +44,35 @@ function clearLogs() {
   });
 }
 
-// 获取相对路径
 function getRelativePath(fullPath) {
-  // fullPath 格式: "/Users/wolf/Desktop/wolf/new_warewolf/server.js:439:17"
-  // 目标: "server.js:439"
-
   if (!fullPath) return 'unknown';
-
-  // 转换为相对路径
   let relative = fullPath;
   if (fullPath.startsWith(PROJECT_ROOT)) {
-    relative = fullPath.substring(PROJECT_ROOT.length + 1); // +1 去掉开头的 /
+    relative = fullPath.substring(PROJECT_ROOT.length + 1);
   }
-
-  // 格式是 "server.js:439:17"，去掉最后的列号，只保留文件名:行号
   const lastColon = relative.lastIndexOf(':');
   if (lastColon !== -1) {
     const secondLastColon = relative.lastIndexOf(':', lastColon - 1);
     if (secondLastColon !== -1) {
-      // 有两个冒号，去掉最后一个（列号）
       return relative.substring(0, lastColon);
     }
   }
-
   return relative;
 }
 
-// 写入日志（带文件路径和行号）
 function writeLog(filepath, level, msg) {
-  // DEBUG 日志需要开启 DEBUG 模式才写入（动态检查 global.DEBUG_MODE）
   if (level === 'DEBUG' && !global.DEBUG_MODE) {
     return;
   }
 
-  // 获取调用者的文件路径和行号
   const stack = new Error().stack;
-  const callerLine = stack.split('\n')[3]; // 第0行是Error, 1是writeLog, 2是caller, 3是实际调用者
-
+  const callerLine = stack.split('\n')[3];
   let caller = 'unknown';
   if (callerLine) {
-    // 尝试提取括号内的路径，格式: "at FuncName (/path/to/file.js:line:col)"
     const pathMatch = callerLine.match(/\(([^)]+)\)/);
     if (pathMatch) {
       caller = getRelativePath(pathMatch[1]);
     } else {
-      // 尝试无括号格式: "at /path/to/file.js:line:col"
       const directMatch = callerLine.match(/at\s+([^\s(]+:\d+:\d+)/);
       if (directMatch) {
         caller = getRelativePath(directMatch[1]);
@@ -92,16 +82,14 @@ function writeLog(filepath, level, msg) {
 
   const timestamp = Date.now();
   const line = `${timestamp} [${level}] ${caller} ${msg}\n`;
+  const target = _testLogPath || filepath;
+  fs.appendFileSync(target, line);
 
-  fs.appendFileSync(filepath, line);
-
-  // ERROR 同时输出到 console
   if (level === 'ERROR') {
     console.error(`[${level}] ${caller} ${msg}`);
   }
 }
 
-// 创建日志实例
 function createLogger(filename) {
   ensureLogsDir();
   const filepath = path.join(LOGS_DIR, filename);
@@ -110,9 +98,8 @@ function createLogger(filename) {
     warn: (msg) => writeLog(filepath, 'WARN', msg),
     error: (msg) => writeLog(filepath, 'ERROR', msg),
     debug: (msg) => writeLog(filepath, 'DEBUG', msg),
-    // 供外部调用（如前端日志）
     write: (level, msg) => writeLog(filepath, level, msg)
   };
 }
 
-module.exports = { createLogger, clearLogs };
+module.exports = { createLogger, clearLogs, setTestLogPath, resetTestLogPath };

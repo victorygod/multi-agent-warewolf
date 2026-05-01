@@ -4,6 +4,8 @@
 
 const { getCamp } = require('./config');
 const { getPlayerDisplay } = require('./utils');
+const { ACTION, PHASE, CAMP, DEATH_REASON, ROLE_TYPE, VISIBILITY, MSG } = require('./constants');
+const { buildMessage, getSelfMark, formatPlayerList } = require('./message_template');
 
 // 角色定义
 const ROLES = {
@@ -13,8 +15,8 @@ const ROLES = {
   villager: {
     id: 'villager',
     name: '平民',
-    camp: 'good',
-    type: 'villager',
+    camp: CAMP.GOOD,
+    type: ROLE_TYPE.VILLAGER,
     skills: {}
   },
 
@@ -22,13 +24,13 @@ const ROLES = {
   seer: {
     id: 'seer',
     name: '预言家',
-    camp: 'good',
-    type: 'god',
+    camp: CAMP.GOOD,
+    type: ROLE_TYPE.GOD,
     state: { seerChecks: [] },
     skills: {
-      seer: {
+      [ACTION.SEER]: {
         type: 'target',
-        visibility: 'self',
+        visibility: VISIBILITY.SELF,
         validate: (target, player, game) => {
           if (target.id === player.id) return false;
           if (!target.alive) return false;
@@ -40,20 +42,24 @@ const ROLES = {
           return true;
         },
         execute: (target, player, game) => {
-          const isWolf = getCamp(target, game) === 'wolf';
+          const isWolf = getCamp(target, game) === CAMP.WOLF;
           // 记录查验历史
           player.state.seerChecks = player.state.seerChecks || [];
           player.state.seerChecks.push({
             targetId: target.id,
-            result: isWolf ? 'wolf' : 'good',
-            night: game.nightCount
+            result: isWolf ? CAMP.WOLF : CAMP.GOOD,
+            night: game.round
           });
           game.message.add({
-            type: 'action',
-            content: `你查验了 ${getPlayerDisplay(game.players, target)}，TA是${isWolf ? '狼人' : '好人'}`,
+            type: MSG.ACTION,
+            content: buildMessage('SEER_CHECK', {
+              player: getPlayerDisplay(game.players, player),
+              target: getPlayerDisplay(game.players, target),
+              result: isWolf ? '狼人' : '好人'
+            }),
             playerId: player.id,
-            visibility: 'self',
-            metadata: { targetId: target.id, result: isWolf ? 'wolf' : 'good' }
+            visibility: VISIBILITY.SELF,
+            metadata: { targetId: target.id, result: isWolf ? CAMP.WOLF : CAMP.GOOD }
           });
         }
       }
@@ -64,13 +70,13 @@ const ROLES = {
   witch: {
     id: 'witch',
     name: '女巫',
-    camp: 'good',
-    type: 'god',
+    camp: CAMP.GOOD,
+    type: ROLE_TYPE.GOD,
     state: { heal: 1, poison: 1 },
     skills: {
-      witch: {
+      [ACTION.WITCH]: {
         type: 'choice',
-        visibility: 'self',
+        visibility: VISIBILITY.SELF,
         execute: (choice, player, game, extraData) => {
           const { action, targetId } = choice;
 
@@ -84,10 +90,13 @@ const ROLES = {
             player.state.heal--;
             game.healTarget = game.werewolfTarget;
             game.message.add({
-              type: 'action',
-              content: `你使用解药救了 ${getPlayerDisplay(game.players, game.players.find(p => p.id === game.werewolfTarget))}`,
+              type: MSG.ACTION,
+              content: buildMessage('WITCH_HEAL', {
+                player: getPlayerDisplay(game.players, player),
+                target: game.werewolfTarget ? getPlayerDisplay(game.players, game.players.find(p => p.id === game.werewolfTarget)) : '无人'
+              }),
               playerId: player.id,
-              visibility: 'self'
+              visibility: VISIBILITY.SELF
             });
           }
 
@@ -98,10 +107,13 @@ const ROLES = {
             player.state.poison--;
             game.poisonTarget = targetId;
             game.message.add({
-              type: 'action',
-              content: `你毒杀了 ${getPlayerDisplay(game.players, target)}`,
+              type: MSG.ACTION,
+              content: buildMessage('WITCH_POISON', {
+                player: getPlayerDisplay(game.players, player),
+                target: getPlayerDisplay(game.players, target)
+              }),
               playerId: player.id,
-              visibility: 'self'
+              visibility: VISIBILITY.SELF
             });
           }
 
@@ -115,21 +127,21 @@ const ROLES = {
   hunter: {
     id: 'hunter',
     name: '猎人',
-    camp: 'good',
-    type: 'god',
+    camp: CAMP.GOOD,
+    type: ROLE_TYPE.GOD,
     state: { canShoot: true },
     skills: {
       // 猎人射击 - 死亡时触发（白天公布死讯时和白天放逐后）
-      shoot: {
+      [ACTION.SHOOT]: {
         type: 'target',
-        availablePhases: ['day_announce', 'post_vote'],
+        availablePhases: [PHASE.DAY_ANNOUNCE, PHASE.POST_VOTE],
         canUse: (player, game, extraData) => {
-          const deathReason = extraData?.deathReason || 'wolf';
+          const deathReason = extraData?.deathReason || DEATH_REASON.WEREWOLF;
           if (!player.state.canShoot) return false;
           // 同守同救不能开枪
-          if (deathReason === 'conflict') return false;
+          if (deathReason === DEATH_REASON.CONFLICT) return false;
           // 被毒死不能开枪（由板子规则控制）
-          if (deathReason === 'poison' && !(game.effectiveRules?.hunter?.canShootIfPoisoned ?? false)) return false;
+          if (deathReason === DEATH_REASON.POISON && !(game.effectiveRules?.hunter?.canShootIfPoisoned ?? false)) return false;
           // 玩家已死亡才能开枪
           if (player.alive) return false;
           return true;
@@ -140,22 +152,27 @@ const ROLES = {
           if (!target) {
             player.state.canShoot = false;
             game.message.add({
-              type: 'action',
-              content: `猎人 ${getPlayerDisplay(game.players, player)} 选择放弃开枪`,
+              type: MSG.ACTION,
+              content: buildMessage('HUNTER_PASS', {
+                player: getPlayerDisplay(game.players, player)
+              }),
               playerId: player.id,
-              visibility: 'public'
+              visibility: VISIBILITY.PUBLIC
             });
             return { success: true, skipped: true };
           }
           if (!target.alive) return;
           player.state.canShoot = false;
-          target.deathReason = 'hunter'; // 设置死亡原因
+          target.deathReason = DEATH_REASON.HUNTER; // 设置死亡原因
           game.deathQueue.push(target);
           game.message.add({
-            type: 'action',
-            content: `猎人 ${getPlayerDisplay(game.players, player)} 开枪带走了 ${getPlayerDisplay(game.players, target)}`,
+            type: MSG.ACTION,
+            content: buildMessage('HUNTER_SHOOT', {
+              player: getPlayerDisplay(game.players, player),
+              target: getPlayerDisplay(game.players, target)
+            }),
             playerId: player.id,
-            visibility: 'public'
+            visibility: VISIBILITY.PUBLIC
           });
         }
       }
@@ -163,11 +180,11 @@ const ROLES = {
     events: {
       'player:death': (data, game, player) => {
         // 同守同救不能开枪
-        if (data.player.id === player.id && data.reason === 'conflict') {
+        if (data.player.id === player.id && data.reason === DEATH_REASON.CONFLICT) {
           player.state.canShoot = false;
         }
         // 被毒死不能开枪（由板子规则控制）
-        if (data.player.id === player.id && data.reason === 'poison' && !(game.effectiveRules?.hunter?.canShootIfPoisoned ?? false)) {
+        if (data.player.id === player.id && data.reason === DEATH_REASON.POISON && !(game.effectiveRules?.hunter?.canShootIfPoisoned ?? false)) {
           player.state.canShoot = false;
         }
       }
@@ -178,13 +195,13 @@ const ROLES = {
   guard: {
     id: 'guard',
     name: '守卫',
-    camp: 'good',
-    type: 'god',
+    camp: CAMP.GOOD,
+    type: ROLE_TYPE.GOD,
     state: { lastGuardTarget: null },
     skills: {
-      guard: {
+      [ACTION.GUARD]: {
         type: 'target',
-        visibility: 'self',
+        visibility: VISIBILITY.SELF,
         validate: (target, player, game) => {
           if (!target.alive) return false;
           if (!(game.effectiveRules?.guard?.allowRepeatGuard ?? false) && player.state.lastGuardTarget === target.id) {
@@ -196,10 +213,13 @@ const ROLES = {
           player.state.lastGuardTarget = target.id;
           game.guardTarget = target.id;
           game.message.add({
-            type: 'action',
-            content: `你守护了 ${getPlayerDisplay(game.players, target)}`,
+            type: MSG.ACTION,
+            content: buildMessage('GUARD_PROTECT', {
+              player: getPlayerDisplay(game.players, player),
+              target: getPlayerDisplay(game.players, target)
+            }),
             playerId: player.id,
-            visibility: 'self'
+            visibility: VISIBILITY.SELF
           });
         }
       }
@@ -210,22 +230,22 @@ const ROLES = {
   idiot: {
     id: 'idiot',
     name: '白痴',
-    camp: 'good',
-    type: 'god',
+    camp: CAMP.GOOD,
+    type: ROLE_TYPE.GOD,
     state: { revealed: false, canVote: true },
     skills: {},
     events: {
       'player:death': (data, game, player) => {
         // 被投票出局时免疫
-        if (data.player.id === player.id && data.reason === 'vote' && !player.state.revealed) {
+        if (data.player.id === player.id && data.reason === DEATH_REASON.VOTE && !player.state.revealed) {
           player.state.revealed = true;
           player.state.canVote = false;
           player.alive = true; // 免疫死亡
           game.message.add({
-            type: 'action',
+            type: MSG.ACTION,
             content: `白痴 ${getPlayerDisplay(game.players, player)} 翻牌免疫放逐，已失去投票权`,
             playerId: player.id,
-            visibility: 'public'
+            visibility: VISIBILITY.PUBLIC
           });
           return { cancel: true };
         }
@@ -237,12 +257,12 @@ const ROLES = {
   cupid: {
     id: 'cupid',
     name: '丘比特',
-    camp: 'good',
-    type: 'god',
+    camp: CAMP.GOOD,
+    type: ROLE_TYPE.GOD,
     skills: {
-      cupid: {
+      [ACTION.CUPID]: {
         type: 'double_target',
-        visibility: 'couple',
+        visibility: VISIBILITY.COUPLE,
         validate: (targets, player, game) => {
           if (targets.length !== 2) return false;
           // 丘比特可以选择自己作为情侣之一
@@ -251,18 +271,25 @@ const ROLES = {
         execute: (targets, player, game) => {
           game.couples = targets.map(t => t.id);
           game.message.add({
-            type: 'action',
-            content: `你连接了 ${getPlayerDisplay(game.players, targets[0])} 和 ${getPlayerDisplay(game.players, targets[1])} 为情侣`,
+            type: MSG.ACTION,
+            content: buildMessage('CUPID_LINK_SELF', {
+              player: getPlayerDisplay(game.players, player),
+              t1: getPlayerDisplay(game.players, targets[0]),
+              t2: getPlayerDisplay(game.players, targets[1])
+            }),
             playerId: player.id,
-            visibility: 'self'
+            visibility: VISIBILITY.SELF
           });
           // 通知情侣
           targets.forEach(t => {
+            const partner = targets.find(x => x.id !== t.id);
             game.message.add({
-              type: 'system',
-              content: `你和 ${getPlayerDisplay(game.players, targets.find(x => x.id !== t.id))} 是情侣`,
+              type: MSG.SYSTEM,
+              content: buildMessage('CUPLE_NOTIFY', {
+                player: getPlayerDisplay(game.players, partner)
+              }),
               playerId: t.id,
-              visibility: 'self'
+              visibility: VISIBILITY.SELF
             });
           });
         }
@@ -276,13 +303,13 @@ const ROLES = {
   werewolf: {
     id: 'werewolf',
     name: '狼人',
-    camp: 'wolf',
+    camp: CAMP.WOLF,
     type: 'wolf',
     skills: {
       // 狼人自爆 - 白天任意阶段可触发
-      explode: {
+      [ACTION.EXPLODE]: {
         type: 'instant',
-        availablePhases: ['sheriff_campaign', 'sheriff_speech', 'sheriff_vote', 'day_discuss', 'day_vote'],
+        availablePhases: [PHASE.SHERIFF_CAMPAIGN, PHASE.SHERIFF_SPEECH, PHASE.SHERIFF_VOTE, PHASE.DAY_DISCUSS, PHASE.DAY_VOTE],
         canUse: (player) => player.alive,
         execute: (_, player, game) => {
           player.alive = false;
@@ -290,17 +317,27 @@ const ROLES = {
           // 广播自爆消息
           game.message.add({
             type: 'explode',
-            content: `狼人 ${getPlayerDisplay(game.players, player)} 自爆`,
+            content: buildMessage('WEREWOLF_EXPLODE', {
+              player: getPlayerDisplay(game.players, player)
+            }),
             playerId: player.id,
-            visibility: 'public'
+            visibility: VISIBILITY.PUBLIC
           });
 
-          // 警长没选出来时自爆，提示警徽流失
-          if (!game.sheriff && ['sheriff_campaign', 'sheriff_speech', 'sheriff_vote'].includes(game.phaseManager?.getCurrentPhase()?.id)) {
+          // 狼人警长自爆，警徽直接销毁（不传递）
+          if (game.sheriff === player.id) {
+            game.sheriff = null;
             game.message.add({
-              type: 'system',
-              content: '警徽流失',
-              visibility: 'public'
+              type: MSG.SYSTEM,
+              content: buildMessage('SHERIFF_BADGE_LOST', {}),
+              visibility: VISIBILITY.PUBLIC
+            });
+          } else if (!game.sheriff && [PHASE.SHERIFF_CAMPAIGN, PHASE.SHERIFF_SPEECH, PHASE.SHERIFF_VOTE].includes(game.phaseManager?.getCurrentPhase()?.id)) {
+            // 警长没选出来时自爆，提示警徽流失
+            game.message.add({
+              type: MSG.SYSTEM,
+              content: buildMessage('SHERIFF_BADGE_LOST', {}),
+              visibility: VISIBILITY.PUBLIC
             });
           }
 
@@ -322,9 +359,16 @@ function createPlayerRole(roleId) {
   const role = getRole(roleId);
   if (!role) return null;
 
+  const state = {};
+  if (role.state) {
+    for (const [key, val] of Object.entries(role.state)) {
+      state[key] = Array.isArray(val) ? [...val] : (typeof val === 'object' && val !== null ? { ...val } : val);
+    }
+  }
+
   return {
     ...role,
-    state: role.state ? { ...role.state } : {}
+    state
   };
 }
 
@@ -337,9 +381,9 @@ const ATTACHMENTS = {
     name: '警长',
     skills: {
       // 竞选 - 所有人可用，只在警长竞选阶段
-      campaign: {
+      [ACTION.SHERIFF_CAMPAIGN]: {
         type: 'instant',
-        availablePhases: ['sheriff_campaign'],
+        availablePhases: [PHASE.SHERIFF_CAMPAIGN],
         canUse: (player, game) => player.alive && !player.state?.withdrew,
         execute: (_, player, game) => {
           player.state = player.state || {};
@@ -348,41 +392,45 @@ const ATTACHMENTS = {
         }
       },
       // 退水 - 候选人可用，只在警长发言阶段
-      withdraw: {
+      [ACTION.WITHDRAW]: {
         type: 'instant',
-        availablePhases: ['sheriff_speech'],
+        availablePhases: [PHASE.SHERIFF_SPEECH],
         canUse: (player, game) => player.state?.isCandidate && !player.state?.withdrew,
         execute: (_, player, game) => {
           player.state.withdrew = true;
           // 广播退水消息
           game.message.add({
-            type: 'system',
-            content: `${getPlayerDisplay(game.players, player)} 退水`,
-            visibility: 'public'
+            type: MSG.SYSTEM,
+            content: buildMessage('WITHDRAW', {
+              player: getPlayerDisplay(game.players, player)
+            }),
+            visibility: VISIBILITY.PUBLIC
           });
           return { success: true, withdraw: true };
         }
       },
       // 指定发言顺序 - 警长可用
-      assignOrder: {
+      [ACTION.ASSIGN_ORDER]: {
         type: 'target',
-        availablePhases: ['day_discuss'],
+        availablePhases: [PHASE.DAY_DISCUSS],
         canUse: (player, game) => game.sheriff === player.id && player.alive,
         validate: (target, player, game) => target?.alive && target.id !== player.id,
         execute: (target, player, game) => {
           game.sheriffAssignOrder = target.id;
           game.message.add({
-            type: 'system',
-            content: `警长指定从 ${getPlayerDisplay(game.players, target)} 开始发言`,
-            visibility: 'public'
+            type: MSG.SYSTEM,
+            content: buildMessage('SHERIFF_ASSIGN_ORDER', {
+              player: getPlayerDisplay(game.players, target)
+            }),
+            visibility: VISIBILITY.PUBLIC
           });
           return { success: true };
         }
       },
       // 传递警徽
-      passBadge: {
+      [ACTION.PASS_BADGE]: {
         type: 'target',
-        availablePhases: ['day_announce', 'post_vote'],
+        availablePhases: [PHASE.DAY_ANNOUNCE, PHASE.POST_VOTE],
         canUse: (player, game) => game.sheriff === player.id && !player.alive,
         validate: (target, player, game) => target?.alive && target?.id !== player.id,
         execute: (target, player, game) => {
@@ -392,9 +440,9 @@ const ATTACHMENTS = {
             game.sheriff = null;
             game.sheriffAssignOrder = null;
             game.message.add({
-              type: 'system',
+              type: MSG.SYSTEM,
               content: '警长死亡，警徽流失',
-              visibility: 'public'
+              visibility: VISIBILITY.PUBLIC
             });
             return { success: true, flowed: true };
           }
@@ -402,9 +450,9 @@ const ATTACHMENTS = {
           game.sheriff = target.id;
           game.sheriffAssignOrder = null;
           game.message.add({
-            type: 'system',
+            type: MSG.SYSTEM,
             content: `警长传警徽给 ${getPlayerDisplay(game.players, target)}`,
-            visibility: 'public'
+            visibility: VISIBILITY.PUBLIC
           });
           return { success: true };
         }
@@ -429,13 +477,8 @@ const ATTACHMENTS = {
         );
 
         if (partner) {
-          partner.deathReason = 'couple';
+          partner.deathReason = DEATH_REASON.COUPLE;
           game.deathQueue.push(partner);
-          game.message.add({
-            type: 'system',
-            content: `${getPlayerDisplay(game.players, partner)} 殉情`,
-            visibility: 'public'
-          });
         }
       }
     }

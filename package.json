@@ -5,7 +5,12 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test": "node test/helpers/test-runner.js",
+    "test:unit": "node test/helpers/test-runner.js --dir test/unit",
+    "test:integration": "node test/helpers/test-runner.js --dir test/integration",
+    "test:engine": "node test/helpers/test-runner.js --dir test/unit/engine",
+    "test:ai": "node test/helpers/test-runner.js --dir test/unit/ai"
   },
   "keywords": [
     "werewolf",

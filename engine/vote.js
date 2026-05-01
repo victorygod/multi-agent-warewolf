@@ -3,6 +3,8 @@
  */
 
 const { getPlayerDisplay } = require('./utils');
+const { MSG, VISIBILITY, DEATH_REASON, ACTION } = require('./constants');
+const { buildMessage, formatVoteDetails } = require('./message_template');
 
 class VoteManager {
   constructor(game) {
@@ -66,10 +68,10 @@ class VoteManager {
 
     this.game.message.add({
       type: 'vote_result',
-      content,
+      content: buildMessage('DAY_VOTE', { 票型: formatVoteDetails(voteDetails) }),
       voteDetails,
       voteCounts,
-      visibility: 'public'
+      visibility: VISIBILITY.PUBLIC
     });
   }
 
@@ -77,8 +79,10 @@ class VoteManager {
   _broadcastTie(topVotes, message) {
     this.game.message.add({
       type: 'vote_tie',
-      content: `${message}：${topVotes.map(p => getPlayerDisplay(this.game.players, p)).join('、')}`,
-      visibility: 'public'
+      content: buildMessage('VOTE_TIE', {
+        平票玩家: topVotes.map(p => getPlayerDisplay(this.game.players, p)).join('，')
+      }),
+      visibility: VISIBILITY.PUBLIC
     });
   }
 
@@ -86,7 +90,7 @@ class VoteManager {
   _handleBanishResult(maxPlayer) {
     if (!maxPlayer) return;
 
-    const deathResult = this.game.handleDeath(maxPlayer, 'vote');
+    const deathResult = this.game.handleDeath(maxPlayer, DEATH_REASON.VOTE);
 
     // 白痴翻牌免疫：死亡被取消，不发公告也不设遗言
     if (deathResult.cancelled) return;
@@ -95,16 +99,13 @@ class VoteManager {
 
     // 添加放逐死亡公告
     this.game.message.add({
-      type: 'death_announce',
-      content: `${getPlayerDisplay(this.game.players, maxPlayer)} 死亡`,
+      type: MSG.DEATH_ANNOUNCE,
+      content: buildMessage('VOTE_ANNOUNCE', {
+        player: getPlayerDisplay(this.game.players, maxPlayer)
+      }),
       deaths: [maxPlayer],
-      visibility: 'public'
+      visibility: VISIBILITY.PUBLIC
     });
-
-    if (deathResult.hasLastWords) {
-      this.game.deathQueue.push(maxPlayer);
-    }
-    // 殉情已通过 couple 事件自动处理，无需手动添加
   }
 
   // 结算投票（支持PK）
@@ -141,8 +142,7 @@ class VoteManager {
     if (validCandidates.length === 1) {
       // 只有一个有效候选人，直接放逐
       this._broadcastTie(validCandidates, `PK仅剩1人，直接放逐`);
-      this.game.lastWordsPlayer = validCandidates[0];
-      this.game.deathQueue.push(validCandidates[0]);
+      this._handleBanishResult(validCandidates[0]);
       this.game.votes = {};
       return { done: true };
     }
@@ -176,7 +176,7 @@ class VoteManager {
     };
 
     await Promise.all(pkVoters.map(voter =>
-      this.game.callVote(voter.id, 'vote', { allowedTargets: getPKAllowedTargets(voter.id) })
+      this.game.callVote(voter.id, ACTION.POST_VOTE, { allowedTargets: getPKAllowedTargets(voter.id) })
     ));
 
     // 计算PK结果
@@ -206,8 +206,10 @@ class VoteManager {
   _broadcastSheriffElected(winner, isPK = false) {
     this.game.message.add({
       type: 'sheriff_elected',
-      content: `${getPlayerDisplay(this.game.players, winner)} 当选警长${isPK ? '（PK当选）' : ''}`,
-      visibility: 'public',
+      content: buildMessage('SHERIFF_ELECTED', {
+        player: getPlayerDisplay(this.game.players, winner)
+      }),
+      visibility: VISIBILITY.PUBLIC,
       sheriffId: winner.id
     });
   }
@@ -216,7 +218,7 @@ class VoteManager {
   async _runElectionRound(candidates, voters, useWeight, title) {
     const allowedTargets = candidates.map(c => c.id);
     await Promise.all(voters.map(voter =>
-      this.game.callVote(voter.id, 'sheriff_vote', { allowedTargets })
+      this.game.callVote(voter.id, ACTION.SHERIFF_VOTE, { allowedTargets })
     ));
 
     const { voteCounts, voteDetails } = this.calculateVoteResults(voters, { useWeight });
@@ -233,7 +235,7 @@ class VoteManager {
     // 边界情况
     if (candidates.length === 0) {
       this.game.sheriff = null;
-      this.game.message.add({ type: 'system', content: '无人竞选警长', visibility: 'public' });
+      this.game.message.add({ type: MSG.SYSTEM, content: buildMessage('NO_SHERIFF_CANDIDATE', {}), visibility: VISIBILITY.PUBLIC });
       return { done: true };
     }
 

@@ -300,6 +300,67 @@ body {
   font-style: italic;
 }
 
+/* 消息标签样式 */
+.msg-tag {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  margin-right: 4px;
+  font-weight: 500;
+}
+
+.msg-speech {
+  background: rgba(46, 204, 113, 0.2);
+  color: #2ecc71;
+}
+
+.msg-last-words {
+  background: rgba(155, 89, 182, 0.2);
+  color: #9b59b6;
+}
+
+.msg-wolf-speech {
+  background: rgba(231, 76, 60, 0.2);
+  color: #e74c3c;
+}
+
+.msg-sheriff-speech {
+  background: rgba(241, 196, 15, 0.2);
+  color: #f1c40f;
+}
+
+.msg-system {
+  background: rgba(52, 73, 94, 0.3);
+  color: #95a5a6;
+}
+
+.msg-private {
+  background: rgba(155, 89, 182, 0.2);
+  color: #9b59b6;
+}
+
+.msg-sheriff {
+  background: rgba(241, 196, 15, 0.2);
+  color: #f39c12;
+}
+
+.msg-vote {
+  background: rgba(52, 152, 219, 0.2);
+  color: #3498db;
+}
+
+.msg-death {
+  background: rgba(231, 76, 60, 0.2);
+  color: #e74c3c;
+}
+
+.msg-game-over {
+  background: rgba(46, 204, 113, 0.2);
+  color: #2ecc71;
+  font-weight: bold;
+}
+
 /* 阶段分割线 */
 .phase-divider {
   display: flex;
@@ -646,8 +707,20 @@ body {
 }
 
 .preset-option.selected {
-  border-color: #4a9eff;
-  background: rgba(74, 158, 255, 0.1);
+  border-color: #4a9eff !important;
+  background: rgba(74, 158, 255, 0.2) !important;
+  box-shadow: 0 0 10px rgba(74, 158, 255, 0.3);
+}
+
+.preset-option.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.preset-option.disabled:hover {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: transparent;
 }
 
 .preset-name {
