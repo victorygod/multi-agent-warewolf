@@ -15,7 +15,6 @@ const { getRandomProfiles, resetUsedNames, releaseAIName } = require('./ai/agent
 const { createLogger, clearLogs } = require('./utils/logger');
 const { getPlayerDisplay } = require('./engine/utils');
 const { BOARD_PRESETS, getEffectiveRules } = require('./engine/config');
-const { formatChatMessages } = require('./ai/agent/formatter');
 
 class ServerCore {
   constructor(options = {}) {
@@ -1039,43 +1038,21 @@ class ServerCore {
   _triggerAIPostGameChat() {
     if (!this.game || !this.aiManager) return;
 
-    const winner = this.game.winner;
-    const winnerText = winner === 'good' ? '好人阵营' : winner === 'wolf' ? '狼人阵营' : '第三方阵营';
-    const ROLE_NAMES = { werewolf: '狼人', seer: '预言家', witch: '女巫', hunter: '猎人', guard: '守卫', villager: '村民', idiot: '白痴', cupid: '丘比特' };
-    const playersInfo = this.game.players.map(p => {
-      const pos = this.game.players.indexOf(p) + 1;
-      const roleId = p.role?.id || p.role || '未知';
-      const roleName = ROLE_NAMES[roleId] || roleId;
-      const status = p.alive ? '存活' : '死亡';
-      return `${pos}号${p.name}: ${roleName} - ${status}`;
-    }).join('\n');
-
     const items = [];
     for (const [playerId, controller] of this.aiManager.controllers) {
       const player = this.game.players.find(p => p.id === playerId);
       if (!player) continue;
 
       if (!player.alive) {
-        this._supplementDeadAIMessages(controller);
+        controller.supplementDeadMessages(this.game);
       }
 
-      items.push({ controller, chatContext: { event: 'game_over', winner: winnerText, playersInfo } });
+      const chatContext = controller.buildGameOverChatContext(this.game);
+      items.push({ controller, chatContext });
     }
 
     this._aiChatQueue.push(...items);
     this._processAIChatQueue();
-  }
-
-  _supplementDeadAIMessages(controller) {
-    if (!this.game) return;
-    const player = controller.getPlayer();
-    if (!player) return;
-    const lastId = controller.agent.lastProcessedId;
-    const visibleMessages = this.game.message.getVisibleTo(player, this.game)
-      .filter(m => m.id > lastId);
-    if (visibleMessages.length === 0) return;
-    const context = controller.buildContext({ actionType: 'analyze' });
-    controller.agent.enqueue({ type: 'answer', context, callback: null });
   }
 
   _handleChatMentions(chatMsg) {
@@ -1093,17 +1070,7 @@ class ServerCore {
       const controller = this._findAIControllerByPrefix(textAfterAt);
       if (controller && !mentionedControllers.has(controller)) {
         mentionedControllers.add(controller);
-
-        const lastId = controller.agent.lastChatMessageId || 0;
-        const recentChat = this.chatMessages.filter(m => m.id > lastId && m.id <= chatMsg.id);
-        controller.agent.lastChatMessageId = chatMsg.id;
-
-        const chatContext = {
-          event: 'mentioned',
-          mentioner: chatMsg.playerName,
-          mentionContent: chatMsg.content,
-          recentChat: recentChat.length > 0 ? formatChatMessages(recentChat) : ''
-        };
+        const chatContext = controller.handleMention(chatMsg, this.chatMessages);
         this._enqueueAIChat(controller, chatContext);
       }
       pos++;

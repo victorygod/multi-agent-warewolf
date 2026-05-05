@@ -1,5 +1,6 @@
 const { PlayerController } = require('../engine/player');
 const { Agent } = require('./agent/agent');
+const { formatChatMessages, buildGameOverInfo } = require('./agent/formatter');
 const { createLogger } = require('../utils/logger');
 const { getPlayerDisplay } = require('../engine/utils');
 const { ACTION, VISIBILITY } = require('../engine/constants');
@@ -171,6 +172,43 @@ class AIController extends PlayerController {
     if (player) {
       await this.agent.resetForNewGame(player, newGame);
     }
+  }
+
+  supplementDeadMessages(game) {
+    const player = this.getPlayer();
+    if (!player) return;
+    const lastId = this.agent.lastProcessedId;
+    const visibleMessages = game.message.getVisibleTo(player, game)
+      .filter(m => m.id > lastId);
+    if (visibleMessages.length === 0) return;
+    const context = this.buildContext({ actionType: 'analyze' });
+    this.agent.enqueue({ type: 'answer', context, callback: null });
+  }
+
+  buildGameOverChatContext(game) {
+    const winner = game.winner;
+    const winnerText = winner === 'good' ? '好人阵营' : winner === 'wolf' ? '狼人阵营' : '第三方阵营';
+    const playersInfo = game.players.map(p => {
+      const pos = game.players.indexOf(p) + 1;
+      const roleId = p.role?.id || p.role || '未知';
+      const roleName = { werewolf: '狼人', seer: '预言家', witch: '女巫', hunter: '猎人', guard: '守卫', villager: '村民', idiot: '白痴', cupid: '丘比特' }[roleId] || roleId;
+      const status = p.alive ? '存活' : '死亡';
+      return `${pos}号${p.name}: ${roleName} - ${status}`;
+    }).join('\n');
+    return { event: 'game_over', winner: winnerText, playersInfo };
+  }
+
+  handleMention(chatMsg, chatMessages) {
+    const lastId = this.agent.lastChatMessageId || 0;
+    const recentChat = chatMessages.filter(m => m.id > lastId && m.id <= chatMsg.id);
+    this.agent.lastChatMessageId = chatMsg.id;
+
+    return {
+      event: 'mentioned',
+      mentioner: chatMsg.playerName,
+      mentionContent: chatMsg.content,
+      recentChat: recentChat.length > 0 ? formatChatMessages(recentChat) : ''
+    };
   }
 
   destroy() {
