@@ -1,17 +1,30 @@
 const { getCurrentTask, buildCurrentTurn, isSpeech } = require('./prompt');
 const { VISIBILITY, CAMP } = require('../../engine/constants');
 const { getToolsForAction, getTool } = require('./tools');
-const { buildToolResultMessage } = require('./formatter');
+const { buildToolResultMessage, formatChatMessages, buildGameOverInfo } = require('./formatter');
 const { LLMModel } = require('./models/llm_model');
 const { RandomModel } = require('./models/random_model');
 const { MockModel } = require('./models/mock_model');
-const { MessageManager } = require('./message_manager');
+const { MessageManager, TOKEN_THRESHOLD } = require('./message_manager');
 const { createLogger } = require('../../utils/logger');
 
 const ANALYSIS_NODES = ['speech'];
 
 let backendLogger = null;
 const getLogger = () => backendLogger || (backendLogger = createLogger('backend.log'));
+
+function estimateTokens(messages) {
+  let count = 0;
+  for (const msg of messages) {
+    if (msg.content) count += Math.ceil(msg.content.length / 4);
+    if (msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        if (tc.function?.arguments) count += Math.ceil(tc.function.arguments.length / 4);
+      }
+    }
+  }
+  return count;
+}
 
 class Agent {
   constructor(options = {}) {
@@ -31,6 +44,8 @@ class Agent {
       { model: this.llmModel, name: 'LLMModel' },
       { model: this.randomModel, name: 'RandomModel' }
     ];
+
+    this.lastChatMessageId = 0;
   }
 
   get messages() {
@@ -41,12 +56,19 @@ class Agent {
     this.mm.updateSystem(player, game, mode);
   }
 
-  async enterGame(player, game, chatContent) {
+  async enterGame(player, game, chatMessages, currentChatId) {
     this._drainQueue();
-    this.mm.updateSystem(player, game, 'game');
-    if (chatContent) {
-      this.mm.loadChatHistory(chatContent);
+    const lastId = this.lastChatMessageId || 0;
+    const deltaMessages = chatMessages.filter(m => m.id > lastId);
+    if (deltaMessages.length > 0) {
+      const delta = formatChatMessages(deltaMessages);
+      this.mm.appendContent(delta);
     }
+    this.lastChatMessageId = currentChatId;
+    const context = { self: player, players: game.players || [] };
+    await new Promise(resolve => {
+      this.enqueue({ type: 'compress', mode: 'chat', context, callback: resolve });
+    });
     this.mm.resetWatermark();
   }
 
@@ -55,22 +77,41 @@ class Agent {
     this.mm.updateSystem(player, null, 'chat');
   }
 
-  async postGameCompress() {
-    await this.mm.compress(this.llmModel, 'chat');
-    this.mm.resetWatermark();
+  async postGameCompress(player, game) {
+    const context = { self: player, players: game?.players || [] };
+    await new Promise(resolve => {
+      this.enqueue({ type: 'compress', mode: 'game', context, callback: resolve });
+    });
   }
 
   async resetForNewGame(player, game) {
     this._drainQueue();
-    await this.mm.compress(this.llmModel);
+    const context = { self: player, players: game.players || [] };
+    await new Promise(resolve => {
+      this.enqueue({ type: 'compress', mode: 'game', context, callback: resolve });
+    });
     this.mm.updateSystem(player, game, 'game');
     this.mm.resetWatermark();
+  }
+
+  appendContent(content) {
+    this.mm.appendContent(content);
+  }
+
+  appendGameOverInfo(player, game) {
+    const info = buildGameOverInfo(game);
+    if (info) {
+      this.mm.appendContent(info);
+    }
+  }
+
+  get lastProcessedId() {
+    return this.mm.lastProcessedId;
   }
 
   destroy() {
     this._drainQueue();
     this.mm.messages = [];
-    this.mm._lastContext = null;
   }
 
   enqueue(request) {
@@ -83,9 +124,10 @@ class Agent {
     this.isProcessing = true;
     try {
       while (this.requestQueue.length > 0) {
-        const { type, context, callback } = this.requestQueue.shift();
+        const { type, mode, context, callback } = this.requestQueue.shift();
         if (type === 'compress') {
-          await this.mm.compress(this.llmModel);
+          await this.mm.compress(this.llmModel, mode, context);
+          callback?.();
         } else {
           const result = await this.answer(context);
           callback?.(result);
@@ -97,7 +139,12 @@ class Agent {
   }
 
   async answer(context) {
-    this.mm.setCompressContext(context);
+    if (this.shouldCompress()) {
+      const mode = this.mm._currentMode === 'chat' ? 'chat' : 'game';
+      await new Promise(resolve => {
+        this.enqueue({ type: 'compress', mode, context, callback: resolve });
+      });
+    }
 
     const { newContent, newMessages } = this.mm.formatIncomingMessages(context);
 
@@ -127,6 +174,11 @@ class Agent {
     }
 
     return isDecision ? { type: 'skip' } : '';
+  }
+
+  shouldCompress() {
+    const tokenCount = estimateTokens(this.mm.messages);
+    return tokenCount > TOKEN_THRESHOLD;
   }
 
   async _agentLoop(model, context, expectedAction, newContent, newMessages, llmView, tools, history) {
@@ -258,4 +310,4 @@ class Agent {
   }
 }
 
-module.exports = { Agent, ANALYSIS_NODES };
+module.exports = { Agent, ANALYSIS_NODES, TOKEN_THRESHOLD };

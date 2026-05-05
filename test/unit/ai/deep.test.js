@@ -307,27 +307,19 @@ describe('Agent - enqueue和processQueue', () => {
 describe('MessageManager - compress', () => {
   it('compressionEnabled=false不压缩', async () => {
     const { MessageManager } = require('../../../ai/agent/message_manager');
-    const mm = new MessageManager(1, { compressionEnabled: false });
+    const mm = new MessageManager({ compressionEnabled: false });
     const player = { id: 1, name: '张三', role: { id: 'seer', name: '预言家', camp: 'good' }, alive: true, state: {} };
     const game = { players: [], round: 1, effectiveRules: {} };
     mm.updateSystem(player, game);
-    mm.setCompressContext({ players: [], self: player });
+    const context = { players: [], self: player };
     const beforeLen = mm.messages.length;
-    await mm.compress(null);
+    await mm.compress(null, 'game', context);
     if (mm.messages.length !== beforeLen) throw new Error('禁用压缩时消息数不应变');
-  });
-
-  it('setCompressContext保存上下文', () => {
-    const { MessageManager } = require('../../../ai/agent/message_manager');
-    const mm = new MessageManager(1);
-    const ctx = { players: [], self: { id: 1 } };
-    mm.setCompressContext(ctx);
-    if (mm._lastContext !== ctx) throw new Error('应保存上下文');
   });
 
   it('formatIncomingMessages过滤已处理消息', () => {
     const { MessageManager } = require('../../../ai/agent/message_manager');
-    const mm = new MessageManager(1);
+    const mm = new MessageManager();
     const messages = [
       { id: 1, type: 'speech', content: '第一条' },
       { id: 2, type: 'speech', content: '第二条' },

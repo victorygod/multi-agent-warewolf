@@ -90,7 +90,7 @@ class AIController extends PlayerController {
     }
 
     if (actionType === ACTION.DAY_VOTE) {
-      this.agent.enqueue({ type: 'compress' });
+      this.agent.enqueue({ type: 'compress', mode: 'game', context });
     }
 
     return { targetId };

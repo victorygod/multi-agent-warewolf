@@ -85,7 +85,7 @@ describe('Agent 生命周期集成测试', () => {
     const controllerAfter = server.core.aiManager.controllers.values().next().value;
     if (!controllerAfter) throw new Error('reset 后应有 controller');
     if (controllerAfter.agent !== originalAgent) throw new Error('reset 后 Agent 应保持同一实例');
-    if (controllerAfter.agent.mm.lastProcessedId !== 0) throw new Error('reset 后 lastProcessedId 应为 0');
+    if (controllerAfter.agent.lastProcessedId !== 0) throw new Error('reset 后 lastProcessedId 应为 0');
   });
 
   it('L4: handleReset 保留 mockModel 配置', async () => {
@@ -210,7 +210,7 @@ describe('Agent 生命周期集成测试', () => {
     await human.waitFor('role_assigned', 5000);
 
     if (controller.agent !== originalAgent) throw new Error('第二局开始后 Agent 应保持同一实例');
-    if (controller.agent.mm.lastProcessedId !== 0) throw new Error('第二局开始后 lastProcessedId 应为 0');
+    if (controller.agent.lastProcessedId !== 0) throw new Error('第二局开始后 lastProcessedId 应为 0');
   });
 });
 

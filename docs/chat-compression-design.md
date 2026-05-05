@@ -379,7 +379,17 @@ updateSystem(player, game, mode = 'game') {
 | 编排层 | Agent | 流程编排、队列管理 | 不直接操作 messages |
 | 存储层 | MessageManager | 消息存储、压缩执行 | 不知道场景概念 |
 
-**已知技术债**：`_supplementDeadAIMessages` 中 `controller.agent.mm.lastProcessedId` 是已有的跨层访问，不在本次压缩改动范围内，后续可给 Agent 加 getter 清理。
+**越界逻辑下沉**：当前 ServerCore 中有以下逻辑违反三层边界，需下沉到 Agent 层：
+
+1. **delta 过滤**：`startGame` 和 `_handleChatMentions` 中 ServerCore 用 `agent.lastChatMessageId` 做 `displayMessages.filter`，然后格式化后传给 Agent。水位线是 Agent 的内部状态，过滤和格式化应由 Agent 完成。ServerCore 只传原始数据（消息列表 + 当前水位线），Agent 自己过滤、格式化、更新水位线。
+
+2. **context 构建**：`_executeAIChat` 中 `const context = { self: player, players: this.game.players || [] }` 是 Agent 层的概念。`postGameCompress` 和 `resetForNewGame` 的 context 应由 Agent 内部构建，ServerCore 只传 `player` 和 `game`。
+
+3. **`_formatChatMessagesForAI`**：格式化聊天消息为文本是 Agent 层的职责，应移到 Agent 或 formatter。
+
+4. **`_buildGameInfoMessage`**：游戏结果文本组装是 Agent 层的职责，应移到 Agent。ServerCore 只负责触发 `appendContent`，不替 Agent 组装内容。
+
+5. **`_supplementDeadAIMessages`**：直接访问 `controller.agent.mm.lastProcessedId`，应通过 Agent 方法暴露。
 
 ### 6.2 Agent
 
@@ -392,11 +402,15 @@ class Agent {
     this.lastChatMessageId = 0;
   }
 
-  async enterGame(player, game, deltaChatContent) {
+  async enterGame(player, game, chatMessages, currentChatId) {
     this._drainQueue();
-    if (deltaChatContent) {
-      this.mm.appendContent(deltaChatContent);
+    const lastId = this.lastChatMessageId || 0;
+    const deltaMessages = chatMessages.filter(m => m.id > lastId);
+    if (deltaMessages.length > 0) {
+      const delta = formatChatMessages(deltaMessages);
+      this.mm.appendContent(delta);
     }
+    this.lastChatMessageId = currentChatId;
     const context = { self: player, players: game.players || [] };
     await new Promise(resolve => {
       this.enqueue({ type: 'compress', mode: 'chat', context, callback: resolve });
@@ -409,7 +423,8 @@ class Agent {
     this.mm.updateSystem(player, null, 'chat');
   }
 
-  async postGameCompress(context) {
+  async postGameCompress(player, game) {
+    const context = { self: player, players: game?.players || [] };
     await new Promise(resolve => {
       this.enqueue({ type: 'compress', mode: 'game', context, callback: resolve });
     });
@@ -448,31 +463,25 @@ class Agent {
 
 ### 6.3 ServerCore
 
-**修改 1**：`startGame` 中按 Agent 的 chatWatermark 传递 delta：
+**修改 1**：`startGame` 中传原始消息列表和水位线给 Agent，由 Agent 自行过滤和格式化：
 
 ```js
 for (const controller of this.aiManager.controllers.values()) {
-  const lastId = controller.agent.lastChatMessageId || 0;
-  const deltaMessages = this.displayMessages.filter(m => m.source === 'chat' && m.id > lastId);
-  const delta = deltaMessages.length > 0
-    ? this._formatChatMessagesForAI(deltaMessages)
-    : null;
-  await controller.agent.enterGame(player, this.game, delta);
-  controller.agent.lastChatMessageId = this.chatMessageId;
+  const player = controller.getPlayer();
+  if (player) {
+    const chatMessages = this.chatMessages;
+    await controller.agent.enterGame(player, this.game, chatMessages, this.chatMessageId);
+  }
 }
 ```
 
-**修改 2**：`_executeAIChat` 中调整顺序，appendContent 先于 postGameCompress。不再直接调 `agent.mm`。context 从 controller 重新构建（此时 player.role 仍在）：
+**修改 2**：`_executeAIChat` 中 `postGameCompress` 只传 `player` 和 `game`，context 由 Agent 内部构建。`_buildGameInfoMessage` 移到 Agent 侧：
 
 ```js
 if (chatContext.event === 'game_over') {
-  const gameInfo = this._buildGameInfoMessage();
-  if (gameInfo) {
-    controller.agent.appendContent(gameInfo);
-  }
   const player = controller.getPlayer();
-  const context = { self: player, players: this.game.players || [] };
-  await controller.agent.postGameCompress(context);
+  controller.agent.appendGameOverInfo(player, this.game);
+  await controller.agent.postGameCompress(player, this.game);
 }
 ```
 
@@ -496,16 +505,20 @@ if (this.aiManager) {
 }
 ```
 
-**修改 4**：`_handleChatMentions` 中把 `controller.lastChatMessageId` 统一改为 `controller.agent.lastChatMessageId`，同时删除不存在的 `lastCompressedChatId` 引用：
+**修改 4**：`_handleChatMentions` 中传原始消息列表和水位线给 Agent，由 Agent 自行过滤：
 
 ```js
-// 修改前
-const lastCompressedId = controller.agent.mm.lastCompressedChatId || controller.lastChatMessageId || 0;
-controller.lastChatMessageId = chatMsg.id;
-
-// 修改后
 const lastId = controller.agent.lastChatMessageId || 0;
+const recentChat = this.chatMessages.filter(m => m.id > lastId && m.id <= chatMsg.id);
 controller.agent.lastChatMessageId = chatMsg.id;
+
+const chatContext = {
+  event: 'mentioned',
+  mentioner: chatMsg.playerName,
+  mentionContent: chatMsg.content,
+  recentChat: recentChat.length > 0 ? formatChatMessages(recentChat) : ''
+};
+this._enqueueAIChat(controller, chatContext);
 ```
 
 **修改 5**：`_executeAIChat` 中 AI 发送消息后更新 `lastChatMessageId`，避免下次 delta 重复包含自己的消息：
@@ -513,6 +526,16 @@ controller.agent.lastChatMessageId = chatMsg.id;
 ```js
 // 在 chatMsg 被添加到 displayMessages 之后
 controller.agent.lastChatMessageId = this.chatMessageId;
+```
+
+**修改 6**：`_supplementDeadAIMessages` 通过 Agent 方法暴露 `lastProcessedId`，不再直接访问 `agent.mm`：
+
+```js
+// 修改前
+const lastId = controller.agent.mm.lastProcessedId;
+
+// 修改后
+const lastId = controller.agent.lastProcessedId;
 ```
 
 ### 6.4 MessageManager 变更汇总
@@ -545,6 +568,16 @@ if (type === 'compress') {
   callback?.(result);
 }
 ```
+
+所有 enqueue compress 的调用点都需携带 mode 和 context：
+
+| 调用点 | mode | context 来源 |
+|--------|------|-------------|
+| `Agent.enterGame` | `'chat'` | `{ self: player, players: game.players }`（Agent 内部构建） |
+| `Agent.postGameCompress` | `'game'` | Agent 内部从 `player` 和 `game` 构建 |
+| `Agent.resetForNewGame` | `'game'` | `{ self: player, players: game.players }`（Agent 内部构建） |
+| `Agent.answer` 阈值触发 | `this.mm._currentMode` | 当前 answer 的 context |
+| `AIController.getVoteResult` | `'game'` | 当前 `buildContext` 返回的 context |
 
 ## 七、Token 估算与阈值
 

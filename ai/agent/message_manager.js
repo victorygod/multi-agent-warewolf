@@ -16,12 +16,15 @@ const ROLE_NAMES = {
   cupid: '丘比特'
 };
 
+const TOKEN_THRESHOLD = 4000;
+const COMPACT_THRESHOLD = 800;
+
 class MessageManager {
   constructor(options = {}) {
     this.messages = [];
     this.lastProcessedId = 0;
     this.compressionEnabled = options.compressionEnabled !== false;
-    this._lastContext = null;
+    this._currentMode = 'chat';
   }
 
   formatIncomingMessages(context) {
@@ -57,28 +60,29 @@ class MessageManager {
     } else {
       this.messages.unshift({ role: 'system', content: systemPrompt });
     }
+    this._currentMode = mode;
   }
 
-  async compress(llmModel, mode = 'game') {
+  async compress(llmModel, mode = 'game', context = null) {
     if (!this.compressionEnabled) return;
     try {
       const newContent = this._compactHistoryAfterSummary();
       if (!newContent) return;
 
-      const player = this._lastContext?.self;
+      const player = context?.self;
       if (!player) return;
 
       const prevSummary = this._findPrevSummary();
-      const prompt = mode === 'chat'
-        ? this._buildChatCompressPrompt(newContent, player, prevSummary)
-        : this._buildCompressPrompt(newContent, player, prevSummary);
 
       let text;
-      if (llmModel && llmModel.isAvailable()) {
-        const summary = await llmModel.call([{ role: 'user', content: prompt }], { enableThinking: false });
-        text = summary.choices?.[0]?.message?.content;
+      if (newContent.length < COMPACT_THRESHOLD) {
+        text = prevSummary ? `${prevSummary}\n\n${newContent}` : newContent;
+      } else if (llmModel && llmModel.isAvailable()) {
+        const prompt = this._buildCompressPrompt(mode, newContent, player, prevSummary, context);
+        const result = await llmModel.call([{ role: 'user', content: prompt }], { enableThinking: false });
+        text = result.choices?.[0]?.message?.content;
       } else {
-        text = '[[' + prompt + ']]';
+        text = '[[' + this._buildCompressPrompt(mode, newContent, player, prevSummary, context) + ']]';
       }
 
       if (text) {
@@ -86,51 +90,20 @@ class MessageManager {
           this.messages[0],
           { role: 'user', content: `【之前压缩摘要】\n${text}` }
         ];
-        getLogger().info(`[MessageManager] 压缩完成，摘要长度=${text.length}`);
+        getLogger().info(`[MessageManager] 压缩完成，mode=${mode}，摘要长度=${text.length}`);
       }
     } catch (err) {
       getLogger().error(`[MessageManager] 压缩历史失败：${err.message}`);
     }
   }
 
-  appendChatSummary(summary) {
-    if (!summary) return;
-    const content = `【之前压缩摘要】\n${summary}`;
-    if (this.messages.length > 1 && this.messages[1].role === 'user' && this.messages[1].content?.startsWith('【之前压缩摘要】')) {
-      this.messages[1] = { role: 'user', content };
-    } else {
-      this.messages.push({ role: 'user', content });
-    }
-  }
-
-  replaceWithSummary(summary) {
-    if (!summary) return;
-    const systemMsg = this.messages[0]?.role === 'system' ? this.messages[0] : null;
-    this.messages = systemMsg
-      ? [systemMsg, { role: 'user', content: `【之前压缩摘要】\n${summary}` }]
-      : [{ role: 'user', content: `【之前压缩摘要】\n${summary}` }];
-  }
-
-  loadChatHistory(chatContent) {
-    if (!chatContent) return;
-    const systemMsg = this.messages[0]?.role === 'system' ? this.messages[0] : null;
-    this.messages = systemMsg
-      ? [systemMsg, { role: 'user', content: `【聊天室历史】\n${chatContent}` }]
-      : [{ role: 'user', content: `【聊天室历史】\n${chatContent}` }];
-    getLogger().info(`[MessageManager] 加载聊天室历史，内容长度=${chatContent.length}`);
+  appendContent(content) {
+    if (!content) return;
+    this.messages.push({ role: 'user', content });
   }
 
   resetWatermark() {
     this.lastProcessedId = 0;
-    this._lastContext = null;
-  }
-
-  appendGameInfo(gameInfo) {
-    this.messages.push({ role: 'user', content: gameInfo });
-  }
-
-  setCompressContext(context) {
-    this._lastContext = context;
   }
 
   _findPrevSummary() {
@@ -161,59 +134,53 @@ class MessageManager {
     return lines.length > 0 ? lines.join('\n') : null;
   }
 
-  _buildCompressPrompt(newContent, player, prevSummary) {
-    const role = player.role;
-    const roleId = role?.id || role;
-    const roleName = ROLE_NAMES[roleId] || roleId;
-    const players = this._lastContext?.players || [];
-    const position = players.findIndex(p => p.id === player.id) + 1;
+  _buildCompressPrompt(mode, newContent, player, prevSummary, context) {
+    const identity = this._buildIdentity(player, mode, context);
+    const prev = prevSummary ? `上次压缩摘要:\n${prevSummary}\n\n` : '';
 
-    let wolfTeammates = '';
-    if (roleId === 'werewolf') {
-      const teammates = players.filter(p => p.alive && p.id !== player.id && p.role?.id === 'werewolf');
-      if (teammates.length > 0) {
-        const positions = teammates.map(p => players.findIndex(gp => gp.id === p.id) + 1 + '号').join('、');
-        wolfTeammates = `\n你的队友: ${positions}`;
-      }
-    }
+    const templates = {
+      game: `请将以下游戏进展压缩为300字以内的摘要，保留：
+1. 存活人数和阵营分布
+2. 已暴露的关键信息（身份、查验、守护等）
+3. 可疑玩家和推理线索
+4. 局势走向`,
 
-    const identityInfo = `名字:${player.name || '未知'} 位置:${position}号位 角色:${roleName}${wolfTeammates}`;
+      chat: `请将以下聊天记录压缩为300字以内的摘要，保留：
+1. 各玩家的发言风格和特点
+2. 玩家之间的互动关系和态度
+3. 讨论的关键话题和观点
+4. 任何未解决的分歧或争议`
+    };
 
-    return `你是狼人杀游戏分析师。请将以下游戏历史压缩为300字以内的局势摘要。
+    return `${identity}
 
-## 你的身份
-${identityInfo}
+${prev}${templates[mode] || templates.game}
 
-## 上次压缩摘要
-${prevSummary || '（无）'}
-
-## 新增消息（从上次压缩点到当前）
-${newContent}
-
-请生成简洁的局势摘要，包含：
-1. 当前存活人数和阵营分布
-2. 关键信息和可疑玩家
-3. 可能的局势走向
-
-直接输出摘要，不要有其他内容，非确定性信息需要保留概率分析。`;
+待压缩内容：
+${newContent}`;
   }
 
-  _buildChatCompressPrompt(newContent, player, prevSummary) {
-    const identityInfo = `名字:${player.name || '未知'}`;
+  _buildIdentity(player, mode, context) {
+    if (mode === 'game') {
+      const role = player.role;
+      const roleId = role?.id || role;
+      const roleName = ROLE_NAMES[roleId] || roleId;
+      const players = context?.players || [];
+      const position = players.findIndex(p => p.id === player.id) + 1;
 
-    return `请将以下聊天历史压缩为300字以内的摘要。
+      let wolfTeammates = '';
+      if (roleId === 'werewolf') {
+        const teammates = players.filter(p => p.alive && p.id !== player.id && p.role?.id === 'werewolf');
+        if (teammates.length > 0) {
+          const positions = teammates.map(p => players.findIndex(gp => gp.id === p.id) + 1 + '号').join('、');
+          wolfTeammates = ` 队友:${positions}`;
+        }
+      }
 
-## 你的身份
-${identityInfo}
-
-## 上次压缩摘要
-${prevSummary || '（无）'}
-
-## 新增消息（从上次压缩点到当前）
-${newContent}
-
-直接输出摘要，不要有其他内容。`;
+      return `你的身份: ${player.name || '未知'} ${position}号位 角色:${roleName}${wolfTeammates}`;
+    }
+    return `你的身份: ${player.name || '未知'}`;
   }
 }
 
-module.exports = { MessageManager };
+module.exports = { MessageManager, TOKEN_THRESHOLD };

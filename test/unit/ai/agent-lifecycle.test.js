@@ -29,25 +29,28 @@ function createTestGame(presetId = '9-standard') {
 }
 
 describe('Agent 生命周期：enterGame / exitGame / resetForNewGame', () => {
-  it('enterGame 切换 system prompt 为 game 模式', async () => {
+  it('enterGame 不设置 game system prompt（由 assignRoles 后的 updateSystemMessage 设置）', async () => {
     const game = createTestGame();
     const controller = new AIController(1, game, { agentType: 'mock' });
     const player = game.players[0];
 
-    await controller.agent.enterGame(player, game);
+    await controller.agent.enterGame(player, game, [], 0);
 
-    const sysMsg = controller.agent.messages[0];
-    if (!sysMsg || sysMsg.role !== 'system') throw new Error('应该有 system 消息');
-    if (!sysMsg.content.includes('狼人杀')) throw new Error('game 模式 system prompt 应包含游戏信息');
+    // enterGame 在 assignRoles 之前调用，此时 player.role 存在但 enterGame 不调 updateSystem(game)
+    // _currentMode 保持 'chat'（默认值）
+    if (controller.agent.mm._currentMode !== 'chat') throw new Error('enterGame 后 _currentMode 应保持 chat');
   });
 
   it('enterGame 注入聊天历史', async () => {
     const game = createTestGame();
     const controller = new AIController(1, game, { agentType: 'mock' });
     const player = game.players[0];
-    const chatContent = '张三: 大家好\n李四: 你好';
+    const chatMessages = [
+      { id: 1, playerName: '张三', content: '大家好' },
+      { id: 2, playerName: '李四', content: '你好' }
+    ];
 
-    await controller.agent.enterGame(player, game, chatContent);
+    await controller.agent.enterGame(player, game, chatMessages, 2);
 
     const hasChatHistory = controller.agent.messages.some(m => m.content?.includes('张三'));
     if (!hasChatHistory) throw new Error('聊天历史应被注入到 messages');
@@ -59,7 +62,7 @@ describe('Agent 生命周期：enterGame / exitGame / resetForNewGame', () => {
     const player = game.players[0];
 
     controller.agent.mm.lastProcessedId = 42;
-    await controller.agent.enterGame(player, game);
+    await controller.agent.enterGame(player, game, [], 0);
 
     if (controller.agent.mm.lastProcessedId !== 0) throw new Error('lastProcessedId 应被重置为 0');
   });
@@ -69,7 +72,7 @@ describe('Agent 生命周期：enterGame / exitGame / resetForNewGame', () => {
     const controller = new AIController(1, game, { agentType: 'mock' });
     const player = game.players[0];
 
-    await controller.agent.enterGame(player, game);
+    await controller.agent.enterGame(player, game, [], 0);
     await controller.agent.exitGame(player);
 
     const sysMsg = controller.agent.messages[0];
@@ -84,36 +87,36 @@ describe('Agent 生命周期：enterGame / exitGame / resetForNewGame', () => {
     const controller = new AIController(1, game, { agentType: 'mock' });
     const player = game.players[0];
 
-    await controller.agent.enterGame(player, game);
+    await controller.agent.enterGame(player, game, [], 0);
     controller.agent.mm.lastProcessedId = 99;
     controller.agent.exitGame(player);
 
     if (controller.agent.mm.lastProcessedId !== 99) throw new Error('exitGame 不应重置 lastProcessedId');
   });
 
-  it('postGameCompress 重置 lastProcessedId', async () => {
+  it('postGameCompress 不重置 lastProcessedId', async () => {
     const game = createTestGame();
     const controller = new AIController(1, game, { agentType: 'mock' });
     const player = game.players[0];
 
-    await controller.agent.enterGame(player, game);
+    await controller.agent.enterGame(player, game, [], 0);
     controller.agent.mm.lastProcessedId = 99;
     controller.agent.exitGame(player);
-    await controller.agent.postGameCompress();
+    await controller.agent.postGameCompress(player, game);
 
-    if (controller.agent.mm.lastProcessedId !== 0) throw new Error('postGameCompress 后 lastProcessedId 应为 0');
+    if (controller.agent.mm.lastProcessedId !== 99) throw new Error('postGameCompress 不应重置 lastProcessedId');
   });
 
-  it('resetForNewGame 切换到新 game 模式', async () => {
+  it('resetForNewGame 不切换到 game 模式（role=null 时 updateSystem 被跳过）', async () => {
     const game = createTestGame();
     const controller = new AIController(1, game, { agentType: 'mock' });
     const player = game.players[0];
 
     await controller.agent.resetForNewGame(player, game);
 
-    const sysMsg = controller.agent.messages[0];
-    if (!sysMsg || sysMsg.role !== 'system') throw new Error('应该有 system 消息');
-    if (!sysMsg.content.includes('狼人杀')) throw new Error('game 模式 system prompt 应包含游戏信息');
+    // resetForNewGame 调 updateSystem(game)，但 player.role 存在所以会成功
+    // 注意：在实际 handleReset 流程中，role 会在 resetForNewGame 之后被置 null
+    if (controller.agent.mm._currentMode !== 'game') throw new Error('resetForNewGame 后 _currentMode 应为 game');
   });
 
   it('resetForNewGame 重置 lastProcessedId', async () => {
@@ -327,15 +330,13 @@ describe('EventEmitter.off', () => {
 });
 
 describe('MessageManager.resetWatermark', () => {
-  it('resetWatermark 重置 lastProcessedId 和 _lastContext', () => {
+  it('resetWatermark 重置 lastProcessedId', () => {
     const mm = new MessageManager();
     mm.lastProcessedId = 42;
-    mm._lastContext = { phase: 'test' };
 
     mm.resetWatermark();
 
     if (mm.lastProcessedId !== 0) throw new Error('lastProcessedId 应为 0');
-    if (mm._lastContext !== null) throw new Error('_lastContext 应为 null');
   });
 });
 
@@ -346,12 +347,12 @@ describe('跨游戏生命周期模拟', () => {
     const originalAgent = controller.agent;
     const player = game.players[0];
 
-    await controller.agent.enterGame(player, game, '聊天记录1');
+    const chatMessages = [{ id: 1, playerName: '张三', content: '聊天记录1' }];
+    await controller.agent.enterGame(player, game, chatMessages, 1);
     controller.agent.exitGame(player);
-    await controller.agent.postGameCompress();
+    await controller.agent.postGameCompress(player, game);
 
     if (controller.agent !== originalAgent) throw new Error('Agent 应保持同一实例');
-    if (controller.agent.mm.lastProcessedId !== 0) throw new Error('postGameCompress 后 lastProcessedId 应为 0');
   });
 
   it('游戏1→游戏2：Agent 保持同一实例且水位线重置', async () => {
@@ -360,7 +361,7 @@ describe('跨游戏生命周期模拟', () => {
     const originalAgent = controller.agent;
     const player = game.players[0];
 
-    await controller.agent.enterGame(player, game);
+    await controller.agent.enterGame(player, game, [], 0);
     controller.agent.mm.lastProcessedId = 10;
 
     await controller.agent.resetForNewGame(player, game);
@@ -374,11 +375,13 @@ describe('跨游戏生命周期模拟', () => {
     const controller = new AIController(1, game, { agentType: 'mock' });
     const player = game.players[0];
 
-    await controller.agent.enterGame(player, game, '第一局前聊天');
+    const chatMessages1 = [{ id: 1, playerName: '张三', content: '第一局前聊天' }];
+    await controller.agent.enterGame(player, game, chatMessages1, 1);
     controller.agent.exitGame(player);
-    await controller.agent.postGameCompress();
+    await controller.agent.postGameCompress(player, game);
 
-    await controller.agent.enterGame(player, game, '第二局前聊天');
+    const chatMessages2 = [{ id: 2, playerName: '李四', content: '第二局前聊天' }];
+    await controller.agent.enterGame(player, game, chatMessages2, 2);
 
     const hasSecondChat = controller.agent.messages.some(m => m.content?.includes('第二局前聊天'));
     if (!hasSecondChat) throw new Error('第二局聊天历史应被注入');

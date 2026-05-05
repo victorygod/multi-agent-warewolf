@@ -15,6 +15,7 @@ const { getRandomProfiles, resetUsedNames, releaseAIName } = require('./ai/agent
 const { createLogger, clearLogs } = require('./utils/logger');
 const { getPlayerDisplay } = require('./engine/utils');
 const { BOARD_PRESETS, getEffectiveRules } = require('./engine/config');
+const { formatChatMessages } = require('./ai/agent/formatter');
 
 class ServerCore {
   constructor(options = {}) {
@@ -506,6 +507,11 @@ class ServerCore {
       const aiPlayers = this.game.players.filter(p => p.isAI);
       const humanPlayers = this.game.players.filter(p => !p.isAI);
 
+      // 先压缩（此时 role 仍在，压缩信息完整）
+      if (this.aiManager) {
+        await this.aiManager.reassignToGame(this.game);
+      }
+
       // 重置 AI 玩家状态
       aiPlayers.forEach(p => {
         p.alive = true;
@@ -548,11 +554,6 @@ class ServerCore {
       this.game.phaseManager = null;
       this.game._pendingRequests = new Map();
 
-      // 重置 AI controllers（保留 Agent，重置内部状态）
-      if (this.aiManager) {
-        await this.aiManager.reassignToGame(this.game);
-      }
-
       // 保留玩家数组（AI + 人类），观战者保留
       this.game.players = [...aiPlayers, ...humanPlayers];
       // 重新分配 ID
@@ -567,6 +568,13 @@ class ServerCore {
       // 从展示流中移除游戏消息，保留聊天消息
       this.displayMessages = this.displayMessages.filter(m => m.source !== 'game');
       this._gameOverDisplayId = 0;
+
+      // 更新 AI 的 chatWatermark
+      if (this.aiManager) {
+        for (const controller of this.aiManager.controllers.values()) {
+          controller.agent.lastChatMessageId = this.chatMessageId;
+        }
+      }
 
       this._checkAndStartGame();
     } else {
@@ -844,15 +852,12 @@ class ServerCore {
 
     this._gameOverDisplayId = 0;
 
-    // AI Agent 进入游戏模式（压缩聊天历史 + 切换 system prompt + 注入聊天记录 + 重置水位线）
+    // AI Agent 进入游戏模式（增量聊天 + 压缩 + 重置水位线）
     if (this.aiManager) {
-      const chatContent = this.displayMessages.some(m => m.source === 'chat')
-        ? this._formatChatMessagesForAI(this.displayMessages.filter(m => m.source === 'chat'))
-        : null;
       for (const controller of this.aiManager.controllers.values()) {
         const player = controller.getPlayer();
         if (player) {
-          await controller.agent.enterGame(player, this.game, chatContent);
+          await controller.agent.enterGame(player, this.game, this.chatMessages, this.chatMessageId);
         }
       }
     }
@@ -1021,21 +1026,6 @@ class ServerCore {
     this.broadcastState();
   }
 
-  _buildGameInfoMessage() {
-    if (!this.game) return null;
-    const presetName = this.game.preset?.name || this.currentPresetId || '标准局';
-    const winner = this.game.winner;
-    const winnerText = winner === 'good' ? '好人阵营获胜' : winner === 'wolf' ? '狼人阵营获胜' : '第三方阵营获胜';
-    const ROLE_NAMES = { werewolf: '狼人', seer: '预言家', witch: '女巫', hunter: '猎人', guard: '守卫', villager: '村民', idiot: '白痴', cupid: '丘比特' };
-    const playersInfo = this.game.players.map((p, i) => {
-      const roleId = p.role?.id || p.role || '未知';
-      const roleName = ROLE_NAMES[roleId] || roleId;
-      const status = p.alive ? '存活' : '死亡';
-      return `${i + 1}号${p.name}: ${roleName} - ${status}`;
-    }).join('\n');
-    return `【上局游戏】${presetName} | ${winnerText}\n${playersInfo}`;
-  }
-
   _exitGameForAllAI() {
     if (!this.aiManager) return;
     for (const controller of this.aiManager.controllers.values()) {
@@ -1080,7 +1070,7 @@ class ServerCore {
     if (!this.game) return;
     const player = controller.getPlayer();
     if (!player) return;
-    const lastId = controller.agent.mm.lastProcessedId;
+    const lastId = controller.agent.lastProcessedId;
     const visibleMessages = this.game.message.getVisibleTo(player, this.game)
       .filter(m => m.id > lastId);
     if (visibleMessages.length === 0) return;
@@ -1104,15 +1094,15 @@ class ServerCore {
       if (controller && !mentionedControllers.has(controller)) {
         mentionedControllers.add(controller);
 
-        const lastCompressedId = controller.agent.mm.lastCompressedChatId || controller.lastChatMessageId || 0;
-        const recentChat = this.displayMessages.filter(m => m.source === 'chat' && m.id > lastCompressedId && m.id <= chatMsg.id);
-        controller.lastChatMessageId = chatMsg.id;
+        const lastId = controller.agent.lastChatMessageId || 0;
+        const recentChat = this.chatMessages.filter(m => m.id > lastId && m.id <= chatMsg.id);
+        controller.agent.lastChatMessageId = chatMsg.id;
 
         const chatContext = {
           event: 'mentioned',
           mentioner: chatMsg.playerName,
           mentionContent: chatMsg.content,
-          recentChat: recentChat.length > 0 ? this._formatChatMessagesForAI(recentChat) : ''
+          recentChat: recentChat.length > 0 ? formatChatMessages(recentChat) : ''
         };
         this._enqueueAIChat(controller, chatContext);
       }
@@ -1132,10 +1122,6 @@ class ServerCore {
       }
     }
     return bestMatch;
-  }
-
-  _formatChatMessagesForAI(messages) {
-    return messages.map(m => `${m.playerName}: ${m.content}`).join('\n');
   }
 
   _enqueueAIChat(controller, chatContext) {
@@ -1204,15 +1190,14 @@ class ServerCore {
         this.displayMessages.push({ ...chatMsg, source: 'chat', displayId: ++this.displayMessageId });
         this.broadcastState();
 
+        controller.agent.lastChatMessageId = this.chatMessageId;
         this._handleChatMentions(chatMsg);
       }
 
       if (chatContext.event === 'game_over') {
-        await controller.agent.postGameCompress();
-        const gameInfo = this._buildGameInfoMessage();
-        if (gameInfo) {
-          controller.agent.mm.appendGameInfo(gameInfo);
-        }
+        const player = controller.getPlayer();
+        controller.agent.appendGameOverInfo(player, this.game);
+        await controller.agent.postGameCompress(player, this.game);
       }
     } catch (e) {
       this.backendLogger.error(`[AI-Chat] 队列处理错误: ${e.message}`);
