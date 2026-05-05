@@ -173,7 +173,7 @@ const CURRENT_TASK = {
       const chatSection = recentChat ? `\n\n最近聊天：\n${recentChat}` : '';
       return `【有人@你】${mentioner} 提到了你："${mentionContent}"${chatSection}\n如果你想回应，请调用 action_chat 工具发言，支持 @名字。不想回应可以跳过。`;
     }
-    return '【聊天室】你可以在聊天室自由发言，打招呼、讨论角色偏好、闲聊都行。请调用 action_chat 工具发言，支持 @名字。不想说话可以跳过。';
+    return '【聊天室】你可以在聊天室自由发言，打招呼、讨论角色偏好、闲聊都行。请调用 action_chat 工具发言，支持 @名字(不要带位置号)。不想说话可以跳过。';
   }
 };
 

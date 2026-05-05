@@ -1623,6 +1623,14 @@ function displayMessage(msg, state) {
     }
   } else if ((msg.type === 'vote_result' || msg.type === 'wolf_vote_result') && msg.voteDetails) {
     const isWolfVote = msg.type === 'wolf_vote_result';
+    // 从 msg.content 提取标题（第一行），如果没有则使用默认标题
+    let title = isWolfVote ? '🔪 狼人刀人投票' : '投票结果';
+    let bodyContent = msg.content || '';
+    if (bodyContent.includes('\n')) {
+      const firstLine = bodyContent.split('\n')[0].trim();
+      if (firstLine) title = firstLine;
+      bodyContent = bodyContent.split('\n').slice(1).join('\n');
+    }
     // 按目标分组
     const byTarget = {};
     for (const v of msg.voteDetails) {
@@ -1630,7 +1638,7 @@ function displayMessage(msg, state) {
       byTarget[v.target].push(v.voter);
     }
     let content = '<div class="vote-result">';
-    content += `<div class="vote-title">${isWolfVote ? '🔪 狼人刀人投票' : '投票结果'}</div>`;
+    content += `<div class="vote-title">${title}</div>`;
     content += '<div class="vote-details">';
     for (const [target, voters] of Object.entries(byTarget)) {
       // target 格式为 "3号玩家3"，提取前面的数字
@@ -1640,8 +1648,8 @@ function displayMessage(msg, state) {
       content += `<div>${target} ${countStr}票（${voters.join('，')}）</div>`;
     }
     content += '</div>';
-    if (isWolfVote && msg.content) {
-      const match = msg.content.match(/最终击杀：(.+)/);
+    if (isWolfVote && bodyContent) {
+      const match = bodyContent.match(/最终击杀：(.+)/);
       if (match) content += `<div class="vote-final">最终击杀：${match[1]}</div>`;
     }
     content += '</div>';

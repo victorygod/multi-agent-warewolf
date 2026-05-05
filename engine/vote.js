@@ -64,7 +64,7 @@ class VoteManager {
   _broadcastVoteResult(title, voteDetails, voteCounts, template = 'DAY_VOTE') {
     this.game.message.add({
       type: 'vote_result',
-      content: buildMessage(template, { 票型: formatVoteDetails(voteDetails, voteCounts) }),
+      content: `${title}\n${buildMessage(template, { 票型: formatVoteDetails(voteDetails, voteCounts) })}`,
       voteDetails,
       voteCounts,
       visibility: VISIBILITY.PUBLIC
@@ -73,11 +73,11 @@ class VoteManager {
 
   // 广播平票消息
   _broadcastTie(topVotes, message) {
+    const players = topVotes.map(p => getPlayerDisplay(this.game.players, p)).join('，');
+    const content = message ? message : buildMessage('VOTE_TIE', { 平票玩家: players });
     this.game.message.add({
       type: 'vote_tie',
-      content: buildMessage('VOTE_TIE', {
-        平票玩家: topVotes.map(p => getPlayerDisplay(this.game.players, p)).join('，')
-      }),
+      content,
       visibility: VISIBILITY.PUBLIC
     });
   }

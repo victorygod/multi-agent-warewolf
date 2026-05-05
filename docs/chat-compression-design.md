@@ -35,7 +35,7 @@ AI 发完复盘消息 → postGameCompress() → appendGameInfo(gameInfo)
 
 `appendGameInfo` 在压缩**之后**执行，导致游戏结果信息不在压缩摘要中。
 
-**修复**：先 `appendGameInfo`，再 `postGameCompress`。
+**修复**：先 `appendContent`，再 `postGameCompress`。
 
 ### 3.2 `loadChatHistory` 违反连续流理念
 
@@ -45,7 +45,7 @@ AI 发完复盘消息 → postGameCompress() → appendGameInfo(gameInfo)
 2. `chatContent` 是 ServerCore 的完整聊天历史，不是 Agent 还没看到的增量内容
 3. 前缀 `【聊天室历史】` 与 `_findPrevSummary()` 识别的 `【之前压缩摘要】` 不一致
 
-**修复**：删除 `loadChatHistory`。`enterGame` 改为 `appendChatDelta` 追加增量，新 Agent 初始化也走同一路径（`lastChatMessageId = 0` 时 delta 就是完整历史）。
+**修复**：删除 `loadChatHistory`。`enterGame` 改为 `appendContent` 追加增量，新 Agent 初始化也走同一路径（`lastChatMessageId = 0` 时 delta 就是完整历史）。
 
 ### 3.3 `postGameCompress` 使用 `mode='chat'` 且多余 `resetWatermark`
 
@@ -66,6 +66,18 @@ AI 发完复盘消息 → postGameCompress() → appendGameInfo(gameInfo)
 `handleReset` 先重置 `p.role = null`，再调用 `reassignToGame` → `resetForNewGame` → `compress`，导致压缩时角色信息丢失。
 
 **修复**：`handleReset` 中调整顺序，先压缩再重置角色（见 6.2 修改 3）。
+
+### 3.6 ServerCore 跨层直接操作 MessageManager
+
+当前代码中 `controller.agent.mm.appendGameInfo()` 和 `controller.agent.mm.lastCompressedChatId` 是 ServerCore 绕过 Agent 直接操作 MessageManager，违反三层分离。
+
+**修复**：ServerCore 只调 Agent 方法，不直接访问 `agent.mm`。
+
+### 3.7 `_lastContext` 可变状态隐患
+
+当前流程先 `mm.setCompressContext(context)` 存状态，后 `mm.compress()` 读状态。如果忘了 set，compress 静默跳过（`!player` return）。
+
+**修复**：context 随队列项传递，compress 直接接收参数，删除 `_lastContext` 和 `setCompressContext`。
 
 ## 四、压缩时机与流程
 
@@ -90,9 +102,9 @@ enterGame (role=null) → assignRoles → _updateIdMappings → updateSystemMess
 ```
 enterGame(player, game, deltaChatContent):
   1. _drainQueue()
-  2. 如果有 deltaChatContent → appendChatDelta(deltaChatContent)
-  3. enqueue compress('chat')  // 告诉 LLM 这是赛前信息，心里有个数就行
-  4. resetWatermark()
+  2. 如果有 deltaChatContent → mm.appendContent(deltaChatContent)
+  3. enqueue compress('chat', context)  // 告诉 LLM 这是赛前信息，心里有个数就行
+  4. mm.resetWatermark()
 
 // assignRoles 之后，_updateIdMappings 调用 updateSystemMessage 设置游戏 system prompt
 ```
@@ -123,11 +135,25 @@ Agent 的 `lastChatMessageId` 记录已处理的聊天消息 ID（对应 ServerC
 | 时机 | 触发方式 | mode | 说明 |
 |------|----------|------|------|
 | 游戏进行中 | day vote 后 enqueue + answer() token 阈值 | `game` | 已有逻辑 + 新增阈值检查 |
-| 游戏结束 | exitGame → AI复盘 → appendGameInfo → enqueue compress | `game` | LLM 面对游戏结束内容会自然侧重结果 |
+| 游戏结束 | exitGame → AI复盘 → appendContent → enqueue compress | `game` | LLM 面对游戏结束内容会自然侧重结果 |
 | 聊天室进行中 | answer() token 阈值 | `chat` | 新增 |
 | 重开新局 | handleReset → resetForNewGame → enqueue compress | `game` | 先压缩再重置角色 |
 
-### 4.4 完整生命周期
+### 4.4 工作流
+
+**聊天室阶段**：AI 自己的对话通过 `appendTurn` 进入 `mm.messages`，其他人的聊天只在当前 turn 的 task prompt 里临时可见，不持久化。token 超阈值时 `answer()` 自动 enqueue `compress('chat')`，将历史折叠为一条摘要。
+
+**进入游戏**（`startGame → enterGame`）：通过 `lastChatMessageId` 水位线，只追加 Agent 没看过的聊天 delta，然后强制 `compress('chat')`，告诉 LLM 这些是赛前信息。`enterGame` 在 `assignRoles` 之前调用，此时 `player.role=null`，不调 `updateSystem(game)`——游戏 system prompt 由后续的 `assignRoles → _updateIdMappings → updateSystemMessage` 设置。最后 `resetWatermark()` 重置游戏消息水位线。
+
+**游戏进行中**：游戏消息通过 `lastProcessedId` 水位线增量追加。day vote 后和 token 超阈值时 enqueue `compress('game')`，前次摘要 + 新消息一起送入 LLM 产出合并摘要。整条流始终是 `[system_game, 压缩摘要, 新消息...]` 的结构。
+
+**游戏结束**（`exitGame → 复盘 → 压缩`）：`exitGame` 只改 system prompt 为 chat，消息不动。AI 发完复盘消息后，先 `appendContent`（游戏结果和角色信息），再 `compress('game')` 将全部内容合并为一条最终摘要。
+
+**回到聊天室**：上下文连续，摘要带着游戏记忆留在流里。新聊天消息追加在摘要之后，token 超阈值时继续 `compress('chat')`。
+
+**重开新局**（`handleReset → resetForNewGame`）：先 `compress('game')`（此时 role 还在，压缩信息完整），再重置 `p.role=null`。`updateSystem(game)` 因 role=null 被跳过，system 保持 chat 模式直到下一次 `assignRoles` 后才更新。`resetWatermark()` 归零游戏水位线，`lastChatMessageId` 更新为当前 chatMessageId。
+
+### 4.5 完整生命周期
 
 ```
 Agent 创建:
@@ -139,7 +165,7 @@ Agent 创建:
   messages = [system_chat, 聊天摘要, 新消息...]
 
 进入游戏 enterGame():
-  appendChatDelta(delta) → compress('chat')
+  appendContent(delta) → compress('chat')
   messages = [system_chat, 合并摘要]                  // 保留已有上下文，追加增量后压缩
   + resetWatermark → 后续游戏消息增量追加
 
@@ -158,7 +184,7 @@ assignRoles → _updateIdMappings → updateSystemMessage:
 AI 发复盘消息:
   messages = [system_chat, 合并摘要, 游戏消息, 复盘消息...]
 
-appendGameInfo:
+appendContent(gameInfo):
   messages = [system_chat, 合并摘要, 游戏消息, 复盘消息, 游戏结果信息]
 
 postGameCompress('game'):
@@ -180,9 +206,9 @@ postGameCompress('game'):
 
 | 时机 | 优化前 | 优化后 |
 |------|--------|--------|
-| enterGame | loadChatHistory 替换完整聊天历史 | appendChatDelta(delta) → enqueue compress('chat')，保留已有上下文 |
+| enterGame | loadChatHistory 替换完整聊天历史 | appendContent(delta) → enqueue compress('chat')，保留已有上下文 |
 | 游戏进行中 | day vote 后压缩（仅 game 模式） | 同前 + answer() 中 token 阈值检查 |
-| 游戏结束 | compress('chat') → appendGameInfo + resetWatermark | appendGameInfo → enqueue compress('game')，无 resetWatermark |
+| 游戏结束 | compress('chat') → appendGameInfo + resetWatermark | appendContent → enqueue compress('game')，无 resetWatermark |
 | 聊天室进行中 | 无压缩 | answer() 中 token 阈值触发 enqueue compress('chat') |
 | 重开新局 | compress() 默认 game 模式 + resetWatermark | enqueue compress('game')，先压缩再重置角色；system 仍为 chat 直到 assignRoles |
 
@@ -190,17 +216,17 @@ postGameCompress('game'):
 
 ### 5.1 统一 compress 函数
 
-一个函数，所有场景通用。mode 只影响提示词模板，短内容跳过 LLM 直接用原文：
+一个函数，所有场景通用。mode 只影响提示词模板，短内容跳过 LLM 直接用原文。context 通过参数显式传递，不依赖可变状态：
 
 ```js
 class MessageManager {
-  async compress(llmModel, mode = 'game') {
+  async compress(llmModel, mode = 'game', context = null) {
     if (!this.compressionEnabled) return;
     try {
       const newContent = this._compactHistoryAfterSummary();
       if (!newContent) return;
 
-      const player = this._lastContext?.self;
+      const player = context?.self;
       if (!player) return;
 
       const prevSummary = this._findPrevSummary();
@@ -209,11 +235,11 @@ class MessageManager {
       if (newContent.length < COMPACT_THRESHOLD) {
         text = prevSummary ? `${prevSummary}\n\n${newContent}` : newContent;
       } else if (llmModel && llmModel.isAvailable()) {
-        const prompt = this._buildCompressPrompt(mode, newContent, player, prevSummary);
+        const prompt = this._buildCompressPrompt(mode, newContent, player, prevSummary, context);
         const result = await llmModel.call([{ role: 'user', content: prompt }], { enableThinking: false });
         text = result.choices?.[0]?.message?.content;
       } else {
-        text = '[[' + this._buildCompressPrompt(mode, newContent, player, prevSummary) + ']]';
+        text = '[[' + this._buildCompressPrompt(mode, newContent, player, prevSummary, context) + ']]';
       }
 
       if (text) {
@@ -236,8 +262,8 @@ class MessageManager {
 两个 mode：`game`、`chat`。`game_over` 合并进 `game`——压缩时的提示词模板只引导 LLM 关注什么，LLM 面对游戏结束内容时会自然侧重结果和转折，不需要单独的模板。`chat_enter` 也合并进 `chat`——压缩的都是聊天内容，摘要会一直留在流里供后续所有场景使用。
 
 ```js
-_buildCompressPrompt(mode, newContent, player, prevSummary) {
-  const identity = this._buildIdentity(player, mode);
+_buildCompressPrompt(mode, newContent, player, prevSummary, context) {
+  const identity = this._buildIdentity(player, mode, context);
   const prev = prevSummary ? `上次压缩摘要:\n${prevSummary}\n\n` : '';
 
   const templates = {
@@ -262,12 +288,12 @@ ${prev}${templates[mode] || templates.game}
 ${newContent}`;
 }
 
-_buildIdentity(player, mode) {
+_buildIdentity(player, mode, context) {
   if (mode === 'game') {
     const role = player.role;
     const roleId = role?.id || role;
     const roleName = ROLE_NAMES[roleId] || roleId;
-    const players = this._lastContext?.players || [];
+    const players = context?.players || [];
     const position = players.findIndex(p => p.id === player.id) + 1;
 
     let wolfTeammates = '';
@@ -285,40 +311,36 @@ _buildIdentity(player, mode) {
 }
 ```
 
-### 5.3 聊天内容追加
+### 5.3 内容追加
 
-`appendChatDelta`：追加增量到消息队列尾部，不替换已有内容。
+`appendContent`：追加内容到消息队列尾部，不替换已有内容。统一替代 `appendChatDelta` 和 `appendGameInfo`——两者实现完全一样，只是调用场景不同。
 
 ```js
-appendChatDelta(deltaContent) {
-  if (!deltaContent) return;
-  this.messages.push({ role: 'user', content: deltaContent });
+appendContent(content) {
+  if (!content) return;
+  this.messages.push({ role: 'user', content });
 }
 ```
 
 不使用特殊前缀。`_compactHistoryAfterSummary` 收集时无需区分来源——游戏结束后 `postGameCompress` 会将所有游戏内容打包压缩，之后 `mm.messages` 中不会再有游戏+聊天混合的未压缩内容。聊天阶段的压缩输入只有聊天内容，不存在混合问题。
 
-### 5.4 `_lastContext` 依赖与保护
+### 5.4 `_currentMode` 追踪
 
-| 场景 | `_lastContext` 状态 | 是否安全 |
-|------|---------------------|----------|
-| 游戏中 day vote 后压缩 | 由 `answer()` 设置 | 安全 |
-| `postGameCompress` | 由最后一次 `answer()` 设置 | 安全 |
-| `enterGame` 后压缩 | 入队前通过 `setCompressContext` 显式设置 | 安全 |
-| `answer()` 阈值触发压缩 | 由当前 `answer()` 设置 | 安全 |
-| `resetForNewGame` 压缩 | `_lastContext` 引用的玩家对象 role 已被重置为 null | **不安全** → 见 6.2 修改 3 |
+`_currentMode` 放在 `MessageManager.updateSystem()` 内部，update 成功时自动设置。不需要外部手动维护：
 
-### 5.5 `_currentMode` 追踪
+```js
+updateSystem(player, game, mode = 'game') {
+  if (!player) return;
+  if (mode === 'game' && !player.role) return;  // guard：不更新，_currentMode 也不变
+  const systemPrompt = buildSystemPrompt(player, { game, mode });
+  // ... 更新 system message
+  this._currentMode = mode;
+}
+```
 
-`_currentMode` 用于 `answer()` 中决定压缩模式（`chat` 或 `game`）。放在 Agent 上，由实际成功更新 system prompt 的操作设置：
+这样谁成功谁设置。`resetForNewGame` 中 `updateSystem(game)` 因 role=null 被跳过，`_currentMode` 保持 `'chat'`，正确反映实际状态。`exitGame` 中 `updateSystem(chat)` 必定成功，`_currentMode` 自动变为 `'chat'`。`_updateIdMappings → updateSystemMessage` 中 `updateSystem(game)` 成功时，`_currentMode` 自动变为 `'game'`。
 
-- `exitGame`：`updateSystem(chat)` 必定成功 → 设 `_currentMode = 'chat'`
-- `resetForNewGame`：`updateSystem(game)` 因 `player.role=null` 被跳过 → **不设**，保持当前值
-- `_updateIdMappings → updateSystemMessage`：`updateSystem(game)` 成功 → 设 `_currentMode = 'game'`
-
-这样 `resetForNewGame` 后 `_currentMode` 保持 `'chat'`，正确反映实际状态（system prompt 仍是 chat）。
-
-### 5.6 水位线系统
+### 5.5 水位线系统
 
 两套水位线系统互相独立，分别追踪游戏消息和聊天消息的增量。
 
@@ -349,26 +371,35 @@ appendChatDelta(deltaContent) {
 
 ## 六、API 变更
 
-### 6.1 Agent
+### 6.1 三层边界
 
-所有压缩统一走 `enqueue`，不直接调 `mm.compress()`。
+| 层 | 类 | 职责 | 不做什么 |
+|---|---|---|---|
+| 调度层 | ServerCore | 触发时机、数据准备 | 不直接调 mm |
+| 编排层 | Agent | 流程编排、队列管理 | 不直接操作 messages |
+| 存储层 | MessageManager | 消息存储、压缩执行 | 不知道场景概念 |
+
+**已知技术债**：`_supplementDeadAIMessages` 中 `controller.agent.mm.lastProcessedId` 是已有的跨层访问，不在本次压缩改动范围内，后续可给 Agent 加 getter 清理。
+
+### 6.2 Agent
+
+所有压缩统一走 `enqueue`，不直接调 `mm.compress()`。context 通过队列传给 compress，不依赖 `_lastContext` 可变状态。
 
 ```js
 class Agent {
   constructor(options = {}) {
     // ... 原有逻辑
     this.lastChatMessageId = 0;
-    this._currentMode = 'chat';
   }
 
   async enterGame(player, game, deltaChatContent) {
     this._drainQueue();
     if (deltaChatContent) {
-      this.mm.appendChatDelta(deltaChatContent);
+      this.mm.appendContent(deltaChatContent);
     }
-    this.mm.setCompressContext({ self: player, players: game.players || [] });
+    const context = { self: player, players: game.players || [] };
     await new Promise(resolve => {
-      this.enqueue({ type: 'compress', mode: 'chat', callback: resolve });
+      this.enqueue({ type: 'compress', mode: 'chat', context, callback: resolve });
     });
     this.mm.resetWatermark();
   }
@@ -376,34 +407,35 @@ class Agent {
   exitGame(player) {
     this._drainQueue();
     this.mm.updateSystem(player, null, 'chat');
-    this._currentMode = 'chat';
   }
 
-  async postGameCompress() {
+  async postGameCompress(context) {
     await new Promise(resolve => {
-      this.enqueue({ type: 'compress', mode: 'game', callback: resolve });
+      this.enqueue({ type: 'compress', mode: 'game', context, callback: resolve });
     });
   }
 
   async resetForNewGame(player, game) {
     this._drainQueue();
+    const context = { self: player, players: game.players || [] };
     await new Promise(resolve => {
-      this.enqueue({ type: 'compress', mode: 'game', callback: resolve });
+      this.enqueue({ type: 'compress', mode: 'game', context, callback: resolve });
     });
     this.mm.updateSystem(player, game, 'game');
-    // updateSystem 因 role=null 被跳过，不设 _currentMode，保持 'chat'
-    if (player.role) this._currentMode = 'game';
     this.mm.resetWatermark();
+  }
+
+  appendContent(content) {
+    this.mm.appendContent(content);
   }
 
   async answer(context) {
     if (this.shouldCompress()) {
-      const mode = this._currentMode === 'chat' ? 'chat' : 'game';
+      const mode = this.mm._currentMode === 'chat' ? 'chat' : 'game';
       await new Promise(resolve => {
-        this.enqueue({ type: 'compress', mode, callback: resolve });
+        this.enqueue({ type: 'compress', mode, context, callback: resolve });
       });
     }
-    this.mm.setCompressContext(context);
     // ... 原有逻辑
   }
 
@@ -414,17 +446,7 @@ class Agent {
 }
 ```
 
-`_updateIdMappings → updateSystemMessage` 设置游戏 system prompt 时，需同步设 `_currentMode = 'game'`：
-
-```js
-// AIController.updateSystemMessage()
-updateSystemMessage() {
-  this.agent.updateSystemMessage(this.getPlayer(), this.game);
-  this.agent._currentMode = 'game';
-}
-```
-
-### 6.2 ServerCore
+### 6.3 ServerCore
 
 **修改 1**：`startGame` 中按 Agent 的 chatWatermark 传递 delta：
 
@@ -440,15 +462,17 @@ for (const controller of this.aiManager.controllers.values()) {
 }
 ```
 
-**修改 2**：`_executeAIChat` 中调整顺序，appendGameInfo 先于 postGameCompress：
+**修改 2**：`_executeAIChat` 中调整顺序，appendContent 先于 postGameCompress。不再直接调 `agent.mm`。context 从 controller 重新构建（此时 player.role 仍在）：
 
 ```js
 if (chatContext.event === 'game_over') {
   const gameInfo = this._buildGameInfoMessage();
   if (gameInfo) {
-    controller.agent.mm.appendGameInfo(gameInfo);
+    controller.agent.appendContent(gameInfo);
   }
-  await controller.agent.postGameCompress();
+  const player = controller.getPlayer();
+  const context = { self: player, players: this.game.players || [] };
+  await controller.agent.postGameCompress(context);
 }
 ```
 
@@ -491,25 +515,30 @@ controller.agent.lastChatMessageId = chatMsg.id;
 controller.agent.lastChatMessageId = this.chatMessageId;
 ```
 
-### 6.3 MessageManager 变更汇总
+### 6.4 MessageManager 变更汇总
 
 | 方法 | 变更 |
 |------|------|
-| `compress(llmModel, mode)` | mode 简化为 `game`、`chat` 两个；短内容跳过 LLM；fallback 保留 `[[prompt]]` |
-| `appendChatDelta(deltaContent)` | 新增，追加增量到消息队列尾部，不用前缀 |
-| `loadChatHistory` | **删除**，被 `appendChatDelta` + `compress` 替代 |
+| `compress(llmModel, mode, context)` | 新增 context 参数；mode 简化为 `game`、`chat` 两个；短内容跳过 LLM；fallback 保留 `[[prompt]]` |
+| `appendContent(content)` | 新增，统一替代 `appendChatDelta` 和 `appendGameInfo` |
+| `updateSystem(player, game, mode)` | 内部维护 `_currentMode`，update 成功时自动设置 |
+| `loadChatHistory` | **删除**，被 `appendContent` + `compress` 替代 |
 | `appendChatSummary` | **删除**，被统一 `compress()` 替代 |
 | `replaceWithSummary` | **删除**，被统一 `compress()` 替代 |
+| `appendChatDelta` | **删除**，被 `appendContent` 替代 |
+| `appendGameInfo` | **删除**，被 `appendContent` 替代 |
+| `setCompressContext` | **删除**，context 通过参数传递 |
+| `_lastContext` | **删除**，不再需要可变状态 |
 | `_buildCompressPrompt(mode, ...)` | 统一入口，按 mode 选择模板 |
-| `_buildIdentity(player, mode)` | 新增，按场景决定身份信息详细程度 |
+| `_buildIdentity(player, mode, context)` | 新增，context 从参数获取而非 `_lastContext` |
 | `_buildCompressPrompt()` / `_buildChatCompressPrompt()` | 合并为 `_buildCompressPrompt(mode, ...)`，删除旧方法 |
 
-### 6.4 队列压缩支持 mode 和 callback
+### 6.5 队列压缩支持 mode、context 和 callback
 
 ```js
 const { type, mode, context, callback } = this.requestQueue.shift();
 if (type === 'compress') {
-  await this.mm.compress(this.llmModel, mode);
+  await this.mm.compress(this.llmModel, mode, context);
   callback?.();
 } else {
   const result = await this.answer(context);

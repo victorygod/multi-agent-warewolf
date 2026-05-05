@@ -395,8 +395,29 @@ const PHASE_FLOW = [
         .filter(p => p.alive && p.id !== playerId && !(p.role.id === 'idiot' && p.state?.revealed))
         .map(p => p.id);
 
+      const startTime = Date.now();
+      game.message.add({
+        type: 'system',
+        content: `[DEBUG] 白天投票开始，并行玩家数: ${voters.length}, 时间: ${startTime}`
+      });
+
       // 并行让所有存活玩家投票
-      await Promise.all(voters.map(voter => game.callVote(voter.id, ACTION.DAY_VOTE, { allowedTargets: getAllowedTargets(voter.id) })));
+      await Promise.all(voters.map(voter => {
+        const voterStart = Date.now();
+        return game.callVote(voter.id, ACTION.DAY_VOTE, { allowedTargets: getAllowedTargets(voter.id) })
+          .then(() => {
+            game.message.add({
+              type: 'system',
+              content: `[DEBUG] ${voter.name} 投票完成, 耗时: ${Date.now() - voterStart}ms`
+            });
+          });
+      }));
+
+      const totalTime = Date.now() - startTime;
+      game.message.add({
+        type: 'system',
+        content: `[DEBUG] 白天投票全部完成, 总耗时: ${totalTime}ms`
+      });
 
       // 不在这里结算，留到 post_vote 阶段统一处理
     }
